@@ -153,12 +153,16 @@ const firebaseConfig = {
   messagingSenderId: "715097891255",
   appId: "1:715097891255:web:8b5217dd48832dadda8832"
 };
-let db = null, sharedDocRef = null, cloudReady = false;
+let db = null, sharedDocRef = null, movimentiColRef = null, cloudReady = false;
 try {
   if (typeof firebase !== "undefined") {
     firebase.initializeApp(firebaseConfig);
     db = firebase.firestore();
     sharedDocRef = db.collection("bilancio_familiare").doc("shared_data");
+    // Ogni movimento è un documento a sé in questa collezione, non più una riga
+    // dentro un array unico: cancellare/modificare un movimento tocca SOLO il suo
+    // documento, mai gli altri — elimina alla radice i conflitti da sincronizzazione.
+    movimentiColRef = db.collection("bilancio_familiare_movimenti");
     cloudReady = true;
   }
 } catch(e) { console.error("Firebase non inizializzato", e); }
@@ -415,7 +419,6 @@ function loadState(){
   state.budgetYear = oggi.getFullYear();
 
   generaMovimentiRicorrenti();
-  riconciliaStoricoAutomatico();
 }
 
 function saveTx(){ localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni)); scheduleCloudSync(); }
@@ -452,7 +455,7 @@ function generaMovimentiRicorrenti(){
   if (state.selYear != null && state.selMonth != null) {
     if (state.selYear > curY || (state.selYear===curY && state.selMonth > curM)) { curY = state.selYear; curM = state.selMonth; }
   }
-  let changed = false;
+  const nuoviGenerati = [];
 
   state.ricorrenti.forEach(rule => {
     const endY = rule.alAnno || curY, endM = rule.alAnno ? rule.alMese : curM;
@@ -471,16 +474,17 @@ function generaMovimentiRicorrenti(){
       if (saltato) return; // l'utente ha cancellato apposta questo mese: non ricrearlo
       const exists = state.transazioni.some(t => t.id===idDeterministico || (t.ricorrenteGruppo===rule.gruppoId && t.anno===y && t.mese===m));
       if (!exists){
-        state.transazioni.push({
+        const nuovo = {
           id: idDeterministico, anno:y, mese:m, categoria:rule.categoria, descrizione:rule.descrizione,
           importo: rule.importo, ricorrenteGruppo: rule.gruppoId, createdAt: Date.now(), updatedAt: Date.now()
-        });
-        changed = true;
+        };
+        state.transazioni.push(nuovo);
+        nuoviGenerati.push(nuovo);
       }
     });
   });
 
-  if (changed) saveTx();
+  if (nuoviGenerati.length > 0) salvaMovimentiBulk(nuoviGenerati, []);
 }
 
 function getYears(){
@@ -1422,12 +1426,16 @@ function aggiornaImportoRicorrente(gid, nuovoImporto, daAnno, daMese){
       importo:nuovoImporto, dalAnno:daAnno, dalMese:daMese, alAnno:null, alMese:null});
   }
   // rimuove eventuali movimenti auto-generati futuri con importo vecchio che ricadono nel nuovo segmento
+  const idsRimossi = [];
   state.transazioni = state.transazioni.filter(t => {
     if (t.ricorrenteGruppo !== gid) return true;
     const afterStart = t.anno > daAnno || (t.anno===daAnno && t.mese >= daMese);
-    return !(afterStart && t.importo !== nuovoImporto);
+    const daRimuovere = afterStart && t.importo !== nuovoImporto;
+    if (daRimuovere) idsRimossi.push(t.id);
+    return !daRimuovere;
   });
-  saveRicorrenti(); saveTx();
+  saveRicorrenti();
+  salvaMovimentiBulk([], idsRimossi);
   generaMovimentiRicorrenti();
 }
 
@@ -1436,12 +1444,15 @@ function interrompiRicorrente(gid, alAnno, alMese){
   const open = segs.find(r => !r.alAnno);
   if (open) { open.alAnno = alAnno; open.alMese = alMese; }
   // rimuove i movimenti auto-generati oltre la data di stop
+  const idsRimossi = [];
   state.transazioni = state.transazioni.filter(t => {
     if (t.ricorrenteGruppo !== gid) return true;
     const afterStop = t.anno > alAnno || (t.anno===alAnno && t.mese > alMese);
+    if (afterStop) idsRimossi.push(t.id);
     return !afterStop;
   });
-  saveRicorrenti(); saveTx();
+  saveRicorrenti();
+  salvaMovimentiBulk([], idsRimossi);
 }
 
 function meseAnnoLabel(y,m){ return MESI[m-1].slice(0,3)+" "+y; }
@@ -2157,10 +2168,9 @@ function attachHandlers(){
               saveRicorrenti();
             }
           }
-          state.transazioni = state.transazioni.filter(x => x.id !== id);
-          segnaCancellazioneRecente(id);
           state.pendingDeleteId = null;
-          saveTx(); render();
+          cancellaMovimento(id);
+          render();
           return;
         }
         // Prima pressione: chiedo conferma tramite lo stato dell'app (non una modifica
@@ -2180,7 +2190,7 @@ function attachHandlers(){
       const gruppoId = uid();
       t.ricorrenteGruppo = gruppoId;
       state.ricorrenti.push({id:uid(), gruppoId, categoria:t.categoria, descrizione:t.descrizione, importo:t.importo, dalAnno:t.anno, dalMese:t.mese, alAnno:null, alMese:null});
-      saveTx(); saveRicorrenti();
+      salvaMovimento(t); saveRicorrenti();
       generaMovimentiRicorrenti();
       render();
       alert(`Fatto: "${t.descrizione}" (${eur(t.importo)}) è ora ricorrente. La trovi anche nel tab \u{1F501} Ricorrenti.`);
@@ -2251,7 +2261,7 @@ function attachHandlers(){
           }
         }
 
-        saveTx();
+        salvaMovimento(target);
         document.getElementById("modalRoot").innerHTML = "";
         render();
       };
@@ -2610,17 +2620,13 @@ function attachHandlers(){
     };
     const trovaDuplicatiBtn = document.getElementById("trovaDuplicatiBtn");
     if (trovaDuplicatiBtn) trovaDuplicatiBtn.onclick = () => {
+      const { cambiato, rimossi, regoleUnificate } = eseguiPuliziaManuale();
+      if (cambiato) render(); // il ridisegno DEVE avvenire prima di scrivere il messaggio, altrimenti lo cancella
       const esitoDiv = document.getElementById("duplicatiEsito");
-      const prima = state.transazioni.length;
-      const regolePrima = state.ricorrenti.length;
-      const cambiato = riconciliaStoricoAutomatico();
-      const rimossi = prima - state.transazioni.length;
-      const regoleUnificate = regolePrima - state.ricorrenti.length;
       if (!cambiato) {
         esitoDiv.innerHTML = `<p class="sub" style="color:${GREEN}">Nessun duplicato trovato (né tra i movimenti né tra le regole ricorrenti).</p>`;
       } else {
         esitoDiv.innerHTML = `<p class="sub" style="color:${GREEN}">Fatto: rimossi ${rimossi} movimenti duplicati${regoleUnificate>0 ? ` e unificate ${regoleUnificate} regole ricorrenti duplicate` : ''}.</p>`;
-        render();
       }
     };
     const exportBtn = document.getElementById("exportBtn");
@@ -2628,9 +2634,20 @@ function attachHandlers(){
     const importFile = document.getElementById("importFile");
     if (importFile) importFile.onchange = importBackup;
     const resetBtn = document.getElementById("resetAllBtn");
-    if (resetBtn) resetBtn.onclick = () => {
-      if (!confirm("Sei sicuro? Questa azione cancella TUTTI i dati salvati su questo dispositivo e non può essere annullata.")) return;
+    if (resetBtn) resetBtn.onclick = async () => {
+      if (!confirm("Sei sicuro? Questa azione cancella TUTTI i dati (anche sul cloud, per tutti i dispositivi) e non può essere annullata.")) return;
       if (!confirm("Ultima conferma: cancellare davvero tutto?")) return;
+      if (movimentiColRef) {
+        try {
+          const tutti = await movimentiColRef.get();
+          const ids = tutti.docs.map(d => d.id);
+          for (let i=0; i<ids.length; i+=450){
+            const batch = db.batch();
+            ids.slice(i,i+450).forEach(id => batch.delete(movimentiColRef.doc(id)));
+            await batch.commit();
+          }
+        } catch(e) { console.error("Errore cancellazione movimenti dal cloud", e); }
+      }
       localStorage.removeItem("bilancio_transazioni");
       localStorage.removeItem("bilancio_budget_annuale");
       localStorage.removeItem("bilancio_saldo_conto");
@@ -2643,6 +2660,7 @@ function attachHandlers(){
       localStorage.removeItem("bilancio_stipendi");
       localStorage.removeItem("bilancio_ultimo_backup_mensile");
       localStorage.removeItem("bilancio_ultimo_backup_giornaliero");
+      localStorage.removeItem("bilancio_migrazione_movimenti_v2");
       location.reload();
     };
 
@@ -2686,13 +2704,16 @@ function renameCategoria(oldName, newName){
   if (idx>-1) state.categorie[idx] = newName;
   const bidx = state.categorieBudget.indexOf(oldName);
   if (bidx>-1) state.categorieBudget[bidx] = newName;
-  state.transazioni.forEach(t => { if (t.categoria===oldName) t.categoria = newName; });
+  const modificati = [];
+  state.transazioni.forEach(t => { if (t.categoria===oldName) { t.categoria = newName; t.updatedAt = Date.now(); modificati.push(t); } });
   Object.keys(state.budgetAnnuale).forEach(y => {
     const yr = state.budgetAnnuale[y];
     if (yr && Object.prototype.hasOwnProperty.call(yr, oldName)) { yr[newName] = yr[oldName]; delete yr[oldName]; }
   });
   if (state.filterCat === oldName) state.filterCat = newName;
-  saveCategorie(); saveCategorieBudget(); saveTx(); saveBudget(); render();
+  saveCategorie(); saveCategorieBudget(); saveBudget();
+  salvaMovimentiBulk(modificati, []);
+  render();
 }
 
 // Riporta i movimenti "storici" (senza createdAt) agli id canonici "seed-N" in
@@ -2702,117 +2723,127 @@ function renameCategoria(oldName, newName){
 // "più di uno = duplicato", non tocca mai spese genuinamente identiche per
 // coincidenza che erano già presenti nello storico originale. Non tocca mai le
 // voci inserite/modificate dall'utente (hanno sempre createdAt).
-function analizzaStoricoENormalizza(){
+function analizzaStoricoENormalizza(lista){
   const indiceSeed = {};
   TX_SEED.forEach((t,i) => {
     const chiave = `${t[0]}|${t[1]}|${t[2]}|${t[3]}|${t[4]}`;
     (indiceSeed[chiave] = indiceSeed[chiave] || []).push("seed-"+i);
   });
   const usati = new Set();
-  state.transazioni.forEach(t => { if (t.id && t.id.indexOf("seed-")===0) usati.add(t.id); });
-  let idRinominati = 0;
+  lista.forEach(t => { if (t.id && t.id.indexOf("seed-")===0) usati.add(t.id); });
+  const rinominati = []; // {vecchioId, oggetto}
   const daRimuovere = [];
-  state.transazioni.forEach(t => {
+  lista.forEach(t => {
     if (t.createdAt) return;
     if (t.id && t.id.indexOf("seed-")===0) return;
     const chiave = `${t.anno}|${t.mese}|${t.categoria}|${t.descrizione}|${t.importo}`;
     const candidati = indiceSeed[chiave];
     if (!candidati) return; // non fa parte dello storico originale (es. da una ricorrenza): non toccare
     const libero = candidati.find(id => !usati.has(id));
-    if (libero) { t.id = libero; usati.add(libero); idRinominati++; }
-    else { daRimuovere.push(t.id); } // tutti i posti "legittimi" per questo contenuto sono già occupati: copia in eccesso
+    if (libero) { const vecchioId = t.id; t.id = libero; usati.add(libero); rinominati.push({vecchioId, oggetto:t}); }
+    else { daRimuovere.push(t.id); } // tutti i posti "legittimi" per questo contenuto sono gia occupati: copia in eccesso
   });
-  return {idRinominati, daRimuovere};
+  return {rinominati, daRimuovere};
 }
 
 // Stesso principio applicato alle voci generate dalle ricorrenze: se esistono
-// più righe con lo stesso gruppo ricorrente + anno + mese (create da dispositivi
-// diversi con id vecchi non deterministici), ne tiene solo una — quella con
-// createdAt più vecchio, cioè la "prima" mai creata — e riporta il suo id alla
-// forma deterministica così non può più ri-duplicarsi in futuro.
+// piu righe con lo stesso gruppo ricorrente + anno + mese (create da dispositivi
+// diversi con id vecchi non deterministici), ne tiene solo una - quella con
+// createdAt piu vecchio, cioe la "prima" mai creata - e riporta il suo id alla
+// forma deterministica cosi non puo piu ri-duplicarsi in futuro.
 // Se in passato si sono duplicate le REGOLE ricorrenti stesse (non solo le
-// transazioni che generano) — es. due regole "Stipendio Chiara" con id diversi,
+// transazioni che generano) - es. due regole "Stipendio Chiara" con id diversi,
 // create indipendentemente da due dispositivi prima che la sincronizzazione
-// delle regole fosse sicura — ogni regola genera le proprie transazioni "gemelle"
+// delle regole fosse sicura - ogni regola genera le proprie transazioni "gemelle"
 // con ricorrenteGruppo diversi: la riconciliazione per mese non le riconosce
 // come collegate. Qui le regole duplicate vengono unificate PRIMA: si tiene una
 // sola regola "canonica" e le transazioni delle regole scartate vengono
-// ri-agganciate ad essa, così la riconciliazione successiva le collassa insieme.
-function unificaRegoleRicorrentiDuplicate(){
+// ri-agganciate ad essa, cosi la riconciliazione successiva le collassa insieme.
+function unificaRegoleRicorrentiDuplicate(lista){
   const gruppi = {};
   state.ricorrenti.forEach(r => {
     const chiave = `${r.categoria}|${r.descrizione}|${r.importo}|${r.dalAnno}|${r.dalMese}`;
     (gruppi[chiave] = gruppi[chiave] || []).push(r);
   });
   let cambiato = false;
+  const modificati = [];
   Object.values(gruppi).forEach(arr => {
     if (arr.length <= 1) return;
     arr.sort((a,b) => a.id < b.id ? -1 : 1); // ordine deterministico: stesso risultato su ogni dispositivo
     const canonica = arr[0];
     arr.slice(1).forEach(duplicata => {
-      state.transazioni.forEach(t => { if (t.ricorrenteGruppo === duplicata.gruppoId) t.ricorrenteGruppo = canonica.gruppoId; });
+      lista.forEach(t => { if (t.ricorrenteGruppo === duplicata.gruppoId) { t.ricorrenteGruppo = canonica.gruppoId; t.updatedAt = Date.now(); modificati.push(t); } });
     });
     state.ricorrenti = state.ricorrenti.filter(r => r === canonica || !arr.includes(r));
     cambiato = true;
   });
-  return cambiato;
+  return {cambiato, modificati};
 }
 
-function riconciliaRicorrenzeAutomatico(){
+function riconciliaRicorrenzeDuplicate(lista){
   const gruppi = {};
-  state.transazioni.forEach(t => {
+  lista.forEach(t => {
     if (!t.ricorrenteGruppo) return;
     const chiave = `${t.ricorrenteGruppo}|${t.anno}|${t.mese}`;
     (gruppi[chiave] = gruppi[chiave] || []).push(t);
   });
-  let cambiato = false;
-  const daRimuovere = new Set();
+  const rinominati = [];
+  const daRimuovere = [];
   Object.entries(gruppi).forEach(([chiave, arr]) => {
     if (arr.length <= 1) return;
     arr.sort((a,b) => (a.createdAt||0) - (b.createdAt||0));
     const [gruppoId, anno, mese] = chiave.split("|");
     const idCanonico = "ric-" + gruppoId + "-" + anno + "-" + mese;
     const sopravvissuto = arr.find(t => t.id === idCanonico) || arr[0];
-    if (sopravvissuto.id !== idCanonico) { sopravvissuto.id = idCanonico; cambiato = true; }
-    arr.forEach(t => { if (t !== sopravvissuto) daRimuovere.add(t.id); });
+    if (sopravvissuto.id !== idCanonico) { const vecchioId = sopravvissuto.id; sopravvissuto.id = idCanonico; rinominati.push({vecchioId, oggetto:sopravvissuto}); }
+    arr.forEach(t => { if (t !== sopravvissuto) daRimuovere.push(t.id); });
   });
-  if (daRimuovere.size > 0) {
-    state.transazioni = state.transazioni.filter(t => !daRimuovere.has(t.id));
-    cambiato = true;
-  }
-  return cambiato;
+  return {rinominati, daRimuovere};
 }
 
-// Esegue in automatico, ad ogni avvio e ad ogni sincronizzazione, la
-// riconciliazione degli id storici seguita dalla rimozione delle sole copie
-// realmente in eccesso — così tutti i dispositivi convergono da soli.
-function riconciliaStoricoAutomatico(){
-  const {idRinominati, daRimuovere} = analizzaStoricoENormalizza();
-  let cambiato = idRinominati > 0;
-  if (daRimuovere.length > 0) {
-    state.transazioni = state.transazioni.filter(t => !daRimuovere.includes(t.id));
-    cambiato = true;
-  }
-  const regoleUnificate = unificaRegoleRicorrentiDuplicate();
-  if (regoleUnificate) { saveRicorrenti(); cambiato = true; }
-  if (riconciliaRicorrenzeAutomatico()) cambiato = true;
-  if (cambiato) saveTx();
-  return cambiato;
+// Calcola tutta la pulizia necessaria su un elenco di movimenti (id storici da
+// normalizzare, doppioni da rimuovere, regole ricorrenti duplicate da unificare)
+// SENZA toccare lo stato globale ne la rete: restituisce l'elenco pulito piu le
+// operazioni da applicare. Usata sia dal controllo manuale in Admin sia dalla
+// migrazione una tantum al nuovo formato "un documento per movimento".
+function calcolaPuliziaCompleta(listaOriginale){
+  let lista = listaOriginale.slice();
+  const daScrivere = [];
+  const daCancellareSet = new Set();
+
+  const {rinominati, daRimuovere} = analizzaStoricoENormalizza(lista);
+  rinominati.forEach(({vecchioId, oggetto}) => { daCancellareSet.add(vecchioId); daScrivere.push(oggetto); });
+  daRimuovere.forEach(id => daCancellareSet.add(id));
+  lista = lista.filter(t => !daRimuovere.includes(t.id));
+
+  const {modificati} = unificaRegoleRicorrentiDuplicate(lista);
+  modificati.forEach(t => daScrivere.push(t));
+
+  const {rinominati: rinominatiRic, daRimuovere: daRimuovereRic} = riconciliaRicorrenzeDuplicate(lista);
+  rinominatiRic.forEach(({vecchioId, oggetto}) => { daCancellareSet.add(vecchioId); daScrivere.push(oggetto); });
+  daRimuovereRic.forEach(id => daCancellareSet.add(id));
+  lista = lista.filter(t => !daRimuovereRic.includes(t.id));
+
+  return {lista, daScrivere, daCancellare: Array.from(daCancellareSet)};
 }
 
-// Versione per il controllo manuale in Admin: restituisce solo il conteggio
-// delle copie in eccesso, senza applicare nulla (l'utente conferma prima).
-function trovaDuplicatiSeed(){
-  return analizzaStoricoENormalizza().daRimuovere;
-}
-
-function rimuoviDuplicatiSeed(){
-  analizzaStoricoENormalizza(); // rinomina prima gli id agli storici corrispondenti
-  const ids = trovaDuplicatiSeed();
-  const prima = state.transazioni.length;
-  state.transazioni = state.transazioni.filter(t => !ids.includes(t.id));
-  saveTx();
-  return prima - state.transazioni.length;
+// Controllo manuale da Admin: applica la pulizia completa allo stato attuale e
+// pubblica le modifiche sul cloud (documento per documento). Con l'archiviazione
+// "un documento per movimento" i doppioni non possono piu formarsi da soli in
+// modo strutturale: questo resta come rete di sicurezza per casi rari (es. doppio
+// clic su "Aggiungi" prima che l'app disabiliti il bottone).
+function eseguiPuliziaManuale(){
+  const regolePrima = state.ricorrenti.length;
+  const risultato = calcolaPuliziaCompleta(state.transazioni);
+  state.transazioni = risultato.lista;
+  localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
+  saveRicorrenti();
+  salvaMovimentiBulk(risultato.daScrivere, risultato.daCancellare);
+  return {
+    cambiato: risultato.daScrivere.length > 0 || risultato.daCancellare.length > 0,
+    rimossi: risultato.daCancellare.length,
+    regoleUnificate: regolePrima - state.ricorrenti.length
+  };
 }
 
 function esportaCSV(year){
@@ -2862,7 +2893,9 @@ function importBackup(e){
       state.speseTrimestrali = data.speseTrimestrali || [];
       state.risparmioReset = data.risparmioReset || null;
       state.stipendi = data.stipendi || defaultStipendiConfig();
-      saveTx(); saveBudget(); saveSaldo(); saveCategorie(); saveCategorieBudget(); saveVociEntrata(); saveRicorrenti(); saveSpeseTrimestrali(); saveRisparmioReset(); saveStipendi();
+      localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
+      saveBudget(); saveSaldo(); saveCategorie(); saveCategorieBudget(); saveVociEntrata(); saveRicorrenti(); saveSpeseTrimestrali(); saveRisparmioReset(); saveStipendi();
+      salvaMovimentiBulk(state.transazioni, []); // ripubblica tutti i movimenti importati sulla collezione cloud
       alert("Backup importato con successo.");
       render();
     } catch(err){ alert("File non valido: " + err.message); }
@@ -3130,8 +3163,11 @@ function scheduleCloudSync(){
 async function pushToCloud(){
   if (!cloudReady) return;
   try {
+    // merge:true (non un .set() che sostituisce tutto): così questo salvataggio
+    // non rischia di cancellare campi che non gestisce più (es. il vecchio array
+    // "transazioni", ancora necessario alla migrazione una tantum finché non ha
+    // finito di leggerlo).
     await sharedDocRef.set({
-      transazioni: state.transazioni,
       budgetAnnuale: state.budgetAnnuale,
       saldoConto: state.saldoConto,
       categorie: state.categorie,
@@ -3142,7 +3178,7 @@ async function pushToCloud(){
       risparmioReset: state.risparmioReset,
       stipendi: state.stipendi,
       lastUpdated: Date.now()
-    });
+    }, {merge: true});
     setCloudStatus("\u2601\uFE0F sincronizzato");
   } catch(e) {
     console.error("Errore sync cloud", e);
@@ -3150,35 +3186,79 @@ async function pushToCloud(){
   }
 }
 
-// Tiene traccia delle cancellazioni fatte di recente su questo dispositivo, per
-// evitare che un'unione con dati cloud non ancora aggiornati "resusciti" un
-// movimento che l'utente ha appena cancellato apposta.
-const cancellazioniRecenti = new Map(); // id -> timestamp
-function segnaCancellazioneRecente(id){
-  cancellazioniRecenti.set(id, Date.now());
-  // pulizia periodica: tieni solo le cancellazioni degli ultimi 10 minuti
-  const soglia = Date.now() - 10*60*1000;
-  cancellazioniRecenti.forEach((ts, k) => { if (ts < soglia) cancellazioniRecenti.delete(k); });
+// Salva UN SOLO movimento: aggiorna lo stato locale, la cache offline, e il
+// cloud (un singolo documento Firestore, non l'intero elenco). Con un
+// documento per movimento, due dispositivi che toccano movimenti diversi non
+// si scontrano mai — e non serve più "ricordarsi" delle cancellazioni: una
+// cancellazione vera su un documento vero non può tornare indietro per sbaglio.
+function salvaMovimento(t){
+  const idx = state.transazioni.findIndex(x => x.id === t.id);
+  if (idx >= 0) state.transazioni[idx] = t; else state.transazioni.push(t);
+  localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
+  if (!applyingRemoteUpdate && movimentiColRef) {
+    movimentiColRef.doc(t.id).set(t)
+      .then(() => setCloudStatus("\u2601\uFE0F sincronizzato"))
+      .catch(e => { console.error("Errore salvataggio movimento", e); setCloudStatus("\u26A0\uFE0F offline (solo locale)"); });
+  }
+}
+function cancellaMovimento(id){
+  state.transazioni = state.transazioni.filter(x => x.id !== id);
+  localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
+  if (!applyingRemoteUpdate && movimentiColRef) {
+    movimentiColRef.doc(id).delete()
+      .then(() => setCloudStatus("\u2601\uFE0F sincronizzato"))
+      .catch(e => { console.error("Errore cancellazione movimento", e); setCloudStatus("\u26A0\uFE0F offline (solo locale)"); });
+  }
+}
+// Per operazioni che toccano molti movimenti insieme (rinomina categoria,
+// pulizia duplicati, generazione ricorrenze, migrazione): applica tutte le
+// modifiche in un'unica operazione batch invece di tante scritture separate.
+// daScrivere: array di movimenti da salvare. daCancellare: array di id da togliere.
+async function salvaMovimentiBulk(daScrivere, daCancellare){
+  localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
+  if (applyingRemoteUpdate || !movimentiColRef || (daScrivere.length===0 && daCancellare.length===0)) return;
+  const operazioni = [...daScrivere.map(t=>({tipo:"set",t})), ...daCancellare.map(id=>({tipo:"del",id}))];
+  try {
+    for (let i=0; i<operazioni.length; i+=450){
+      const batch = db.batch();
+      operazioni.slice(i,i+450).forEach(op => {
+        if (op.tipo==="set") batch.set(movimentiColRef.doc(op.t.id), op.t);
+        else batch.delete(movimentiColRef.doc(op.id));
+      });
+      await batch.commit();
+    }
+    setCloudStatus("\u2601\uFE0F sincronizzato");
+  } catch(e) { console.error("Errore salvataggio multiplo movimenti", e); setCloudStatus("\u26A0\uFE0F offline (solo locale)"); }
 }
 
-// Unisce l'elenco locale e quello arrivato dal cloud SENZA sostituire in blocco:
-// per ogni id presente in entrambi tiene il più recente (updatedAt/createdAt);
-// per ogni id presente solo in uno dei due lo mantiene (a meno che sia stato
-// cancellato di recente su questo dispositivo). Così un sync con dati non ancora
-// aggiornati non può più far sparire in silenzio movimenti già registrati.
-function mergeTransazioni(locali, remote){
-  const map = {};
-  locali.forEach(t => { map[t.id] = t; });
-  remote.forEach(t => {
-    if (cancellazioniRecenti.has(t.id)) return; // cancellato di proposito poco fa: non farlo ricomparire
-    const esistente = map[t.id];
-    if (!esistente) { map[t.id] = t; return; }
-    const tsRemote = t.updatedAt || t.createdAt || 0;
-    const tsLocale = esistente.updatedAt || esistente.createdAt || 0;
-    if (tsRemote > tsLocale) map[t.id] = t;
+// Ascolta la collezione dei movimenti: Firestore segnala ESATTAMENTE cosa è
+// cambiato (aggiunto/modificato/rimosso) invece di dover confrontare interi
+// elenchi. Ogni dispositivo applica solo la differenza reale.
+function initMovimentiSync(){
+  if (!cloudReady || !movimentiColRef) return;
+  movimentiColRef.onSnapshot((snapshot) => {
+    applyingRemoteUpdate = true;
+    snapshot.docChanges().forEach(change => {
+      const id = change.doc.id;
+      if (change.type === "removed") {
+        state.transazioni = state.transazioni.filter(x => x.id !== id);
+      } else {
+        const data = change.doc.data();
+        const idx = state.transazioni.findIndex(x => x.id === id);
+        if (idx >= 0) state.transazioni[idx] = {...data, id}; else state.transazioni.push({...data, id});
+      }
+    });
+    localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
+    applyingRemoteUpdate = false;
+    generaMovimentiRicorrenti();
+    render();
+    setCloudStatus("\u2601\uFE0F sincronizzato");
+  }, (err) => {
+    console.error("Errore sincronizzazione movimenti", err);
+    setCloudStatus("\u26A0\uFE0F offline (solo locale)");
   });
-  return Object.values(map);
 }
+
 
 // Unisce due dizionari a due livelli (es. {anno: {categoria: valore}}) senza
 // perdere chiavi presenti solo da un lato. Sui conflitti diretti (stessa chiave,
@@ -3241,9 +3321,6 @@ function mergeArrayStringhe(locale, remoto){
 function applyRemoteData(data){
   applyingRemoteUpdate = true;
   const mancaSpeseTrimestrali = data.speseTrimestrali === undefined;
-  const transazioniUnite = mergeTransazioni(state.transazioni, data.transazioni || []);
-  const eranoDiverse = JSON.stringify(transazioniUnite.map(t=>t.id).sort()) !== JSON.stringify((data.transazioni||[]).map(t=>t.id).sort());
-  state.transazioni = transazioniUnite;
   state.budgetAnnuale = mergeDizionarioAnnidato(state.budgetAnnuale, data.budgetAnnuale);
   state.saldoConto = mergeDizionarioSemplice(state.saldoConto, data.saldoConto);
   state.categorie = mergeArrayStringhe(state.categorie, data.categorie && data.categorie.length ? data.categorie : [...DEFAULT_CATEGORIE]);
@@ -3255,12 +3332,10 @@ function applyRemoteData(data){
   if (!mancaSpeseTrimestrali) state.speseTrimestrali = mergeArrayPerId(state.speseTrimestrali, data.speseTrimestrali);
   if (data.risparmioReset !== undefined) state.risparmioReset = data.risparmioReset;
   if (data.stipendi !== undefined) state.stipendi = data.stipendi;
-  saveTx(); saveBudget(); saveSaldo(); saveCategorie(); saveCategorieBudget(); saveVociEntrata(); saveRicorrenti(); saveSpeseTrimestrali(); saveRisparmioReset(); saveStipendi();
-  generaMovimentiRicorrenti();
+  saveBudget(); saveSaldo(); saveCategorie(); saveCategorieBudget(); saveVociEntrata(); saveRicorrenti(); saveSpeseTrimestrali(); saveRisparmioReset(); saveStipendi();
   applyingRemoteUpdate = false;
   migraStipendiRpd(); // se i dati arrivati dal cloud sono in formato vecchio (senza scaglioni ufficiali), li aggiorna subito e li ripubblica corretti sul cloud
-  const riconciliato = riconciliaStoricoAutomatico(); // converge id storici e ripulisce duplicati residui, su OGNI sync
-  if (eranoDiverse || riconciliato) pushToCloud(); // qualcosa è cambiato rispetto a quanto arrivato dal cloud: ripubblica
+  generaMovimentiRicorrenti();
   render();
   setCloudStatus("\u2601\uFE0F sincronizzato");
   if (mancaSpeseTrimestrali) pushToCloud();
@@ -3281,6 +3356,33 @@ function initCloudSync(){
     console.error("Errore connessione cloud", err);
     setCloudStatus("\u26A0\uFE0F offline (solo locale)");
   });
+}
+
+// Migrazione una tantum: prima i movimenti vivevano tutti dentro un unico array
+// nel documento condiviso; ora ognuno è un documento a sé nella collezione
+// "bilancio_familiare_movimenti", per eliminare alla radice i conflitti da
+// sincronizzazione. Legge il vecchio array (se c'è ancora), lo ripulisce con la
+// stessa logica del controllo duplicati, e lo scrive nella nuova collezione.
+// Se un altro dispositivo ha già completato la migrazione (la collezione nuova
+// non è vuota), non fa nulla per evitare di duplicare tutto.
+async function migraMovimentiAColezioneSeparata(){
+  if (!cloudReady || !movimentiColRef) return;
+  if (localStorage.getItem("bilancio_migrazione_movimenti_v2")) return;
+  try {
+    const giaPresenti = await movimentiColRef.limit(1).get();
+    if (!giaPresenti.empty) { localStorage.setItem("bilancio_migrazione_movimenti_v2", "1"); return; }
+    const vecchioDoc = await sharedDocRef.get();
+    const vecchiaLista = (vecchioDoc.exists && vecchioDoc.data().transazioni) || [];
+    if (vecchiaLista.length === 0) { localStorage.setItem("bilancio_migrazione_movimenti_v2", "1"); return; }
+    const { lista: listaPulita } = calcolaPuliziaCompleta(vecchiaLista);
+    saveRicorrenti(); // calcolaPuliziaCompleta può aver unificato regole ricorrenti duplicate nel frattempo
+    for (let i=0; i<listaPulita.length; i+=450){
+      const batch = db.batch();
+      listaPulita.slice(i,i+450).forEach(t => batch.set(movimentiColRef.doc(t.id), t));
+      await batch.commit();
+    }
+    localStorage.setItem("bilancio_migrazione_movimenti_v2", "1");
+  } catch(e) { console.error("Errore migrazione movimenti alla nuova collezione", e); }
 }
 
 // Migrazione una tantum: alcune versioni precedenti dell'app potevano salvare sul
@@ -3381,6 +3483,24 @@ async function ripristinaSnapshot(id){
   if (!confirm(`Ripristinare lo snapshot del ${id}? Questo SOVRASCRIVE i dati attuali (locali e sul server) con quelli salvati in quello snapshot. Non è reversibile se non hai un altro backup più recente.`)) return;
   const snap = cachedSnapshotsList.find(s => s.id === id);
   if (!snap) { alert("Snapshot non trovato."); return; }
+  // Il ripristino è una sostituzione completa: cancella dalla collezione cloud
+  // tutti i movimenti che non fanno parte dello snapshot, poi scrive quelli che
+  // lo snapshot prevede.
+  if (movimentiColRef) {
+    try {
+      const tutti = await movimentiColRef.get();
+      const idsSnapshot = new Set((snap.transazioni||[]).map(t=>t.id));
+      const daCancellare = tutti.docs.map(d => d.id).filter(id => !idsSnapshot.has(id));
+      for (let i=0; i<daCancellare.length; i+=450){
+        const batch = db.batch();
+        daCancellare.slice(i,i+450).forEach(id => batch.delete(movimentiColRef.doc(id)));
+        await batch.commit();
+      }
+    } catch(e) { console.error("Errore pulizia movimenti prima del ripristino", e); }
+  }
+  state.transazioni = snap.transazioni || [];
+  localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
+  await salvaMovimentiBulk(state.transazioni, []);
   applyRemoteData(snap);
   await pushToCloud();
   alert("Ripristino completato.");
@@ -3390,7 +3510,10 @@ async function ripristinaSnapshot(id){
 // ---------- init ----------
 loadState();
 render();
-initCloudSync();
+migraMovimentiAColezioneSeparata().then(() => {
+  initCloudSync();
+  initMovimentiSync();
+});
 if (localStorage.getItem("bilancio_password_hash")) {
   showLockScreen();
 } else {
