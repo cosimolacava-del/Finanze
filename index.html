@@ -3234,10 +3234,36 @@ async function salvaMovimentiBulk(daScrivere, daCancellare){
 // Ascolta la collezione dei movimenti: Firestore segnala ESATTAMENTE cosa è
 // cambiato (aggiunto/modificato/rimosso) invece di dover confrontare interi
 // elenchi. Ogni dispositivo applica solo la differenza reale.
-function initMovimentiSync(){
-  if (!cloudReady || !movimentiColRef) return;
-  movimentiColRef.onSnapshot((snapshot) => {
-    applyingRemoteUpdate = true;
+// La PRIMA volta che un dispositivo si collega, però, non basta applicare le
+// "differenze": il dato locale di partenza (soprattutto su un dispositivo che
+// riparte da zero) può contenere voci storiche già cancellate sul server in
+// passato da un altro dispositivo — quel dispositivo non l'ha mai saputo. Il
+// primo collegamento quindi sostituisce lo stato locale con la fotografia
+// completa e reale del server, non solo le differenze.
+let primoSnapshotMovimenti = true;
+function processaSnapshotMovimenti(snapshot){
+  applyingRemoteUpdate = true;
+  if (primoSnapshotMovimenti) {
+    primoSnapshotMovimenti = false;
+    const daServer = {};
+    snapshot.forEach(doc => { daServer[doc.id] = {...doc.data(), id: doc.id}; });
+    const numSulServer = Object.keys(daServer).length;
+    // Prudenza: se il server risulta vuoto (o quasi) mentre in locale c'è già
+    // molto di più, è molto più probabile un problema di sincronizzazione
+    // temporaneo che una cancellazione reale di tutto — non svuotare il locale
+    // in quel caso, aspetta un aggiornamento successivo più affidabile.
+    const localeSignificativo = state.transazioni.length > 10;
+    if (numSulServer === 0 && localeSignificativo) {
+      applyingRemoteUpdate = false;
+      return;
+    }
+    // non perdere movimenti aggiunti in locale pochissimo fa (es. offline, prima
+    // che il server rispondesse la prima volta) e non ancora confermati dal server
+    state.transazioni.forEach(t => {
+      if (!daServer[t.id] && t.createdAt && (Date.now()-t.createdAt) < 60000) daServer[t.id] = t;
+    });
+    state.transazioni = Object.values(daServer);
+  } else {
     snapshot.docChanges().forEach(change => {
       const id = change.doc.id;
       if (change.type === "removed") {
@@ -3248,12 +3274,16 @@ function initMovimentiSync(){
         if (idx >= 0) state.transazioni[idx] = {...data, id}; else state.transazioni.push({...data, id});
       }
     });
-    localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
-    applyingRemoteUpdate = false;
-    generaMovimentiRicorrenti();
-    render();
-    setCloudStatus("\u2601\uFE0F sincronizzato");
-  }, (err) => {
+  }
+  localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
+  applyingRemoteUpdate = false;
+  generaMovimentiRicorrenti();
+  render();
+  setCloudStatus("\u2601\uFE0F sincronizzato");
+}
+function initMovimentiSync(){
+  if (!cloudReady || !movimentiColRef) return;
+  movimentiColRef.onSnapshot(processaSnapshotMovimenti, (err) => {
     console.error("Errore sincronizzazione movimenti", err);
     setCloudStatus("\u26A0\uFE0F offline (solo locale)");
   });
