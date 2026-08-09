@@ -590,6 +590,74 @@ function niceStep(range){
   return step * mag;
 }
 
+// Grafico a torta nativo (canvas), per la ripartizione delle spese per categoria.
+// slices: [{label, value, color}]
+function drawPieChart(canvas, slices){
+  const {ctx, w, h} = setupCanvas(canvas);
+  ctx.clearRect(0,0,w,h);
+  const totale = slices.reduce((s,d)=>s+d.value, 0);
+  if (totale <= 0) return;
+
+  const legendW = w > 480 ? 200 : 0; // su schermi stretti la legenda va sotto, non a fianco
+  const cx = legendW ? (w - legendW) / 2 : w / 2;
+  const cy = legendW ? h / 2 : h / 2 - 60;
+  const raggio = Math.min(cx, cy) - 16;
+
+  let angolo = -Math.PI / 2;
+  slices.forEach(s => {
+    const frazione = s.value / totale;
+    const angoloFine = angolo + frazione * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, raggio, angolo, angoloFine);
+    ctx.closePath();
+    ctx.fillStyle = s.color;
+    ctx.fill();
+    ctx.strokeStyle = "#FBF9F3";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // etichetta percentuale solo se la fetta è abbastanza grande da leggerla
+    if (frazione > 0.045) {
+      const angoloMedio = (angolo + angoloFine) / 2;
+      const lx = cx + Math.cos(angoloMedio) * raggio * 0.65;
+      const ly = cy + Math.sin(angoloMedio) * raggio * 0.65;
+      ctx.fillStyle = "#fff";
+      ctx.font = "600 11px -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(Math.round(frazione*100)+"%", lx, ly);
+    }
+    angolo = angoloFine;
+  });
+
+  // legenda: a fianco su schermi larghi, sotto la torta su schermi stretti
+  ctx.font = "12px -apple-system, sans-serif";
+  ctx.textBaseline = "middle";
+  if (legendW) {
+    let ly = cy - (slices.length * 20)/2 + 10;
+    slices.forEach(s => {
+      ctx.fillStyle = s.color;
+      ctx.fillRect(w - legendW + 6, ly - 6, 12, 12);
+      ctx.fillStyle = MUTED;
+      ctx.textAlign = "left";
+      ctx.fillText(`${s.label} (${eur(s.value)})`, w - legendW + 24, ly);
+      ly += 20;
+    });
+  } else {
+    let lx = 10, ly = h - (Math.ceil(slices.length/2) * 20) - 6;
+    const startLy = ly;
+    slices.forEach((s, i) => {
+      ctx.fillStyle = s.color;
+      ctx.fillRect(lx, ly - 6, 10, 10);
+      ctx.fillStyle = MUTED;
+      ctx.textAlign = "left";
+      ctx.fillText(s.label, lx + 16, ly);
+      ly += 20;
+      if (i % 2 === 1) { ly = startLy; lx += w/2; }
+    });
+  }
+}
+
 function drawLineChart(canvas, labels, datasets, opts){
   opts = opts || {};
   const {ctx, w, h} = setupCanvas(canvas);
@@ -939,6 +1007,7 @@ function renderAndamentoView(){
         <div class="sub">${categoriaTop ? eur(categoriaTop.totale)+' — '+categoriaTop.pct.toFixed(1)+'% delle uscite' : ''}</div>
       </div>
     </div>
+    <canvas class="chart-canvas" id="catPieChart" data-h="280" style="margin-bottom:16px"></canvas>
     <table class="report-table">
       <thead><tr><th>Categoria</th><th>Media mensile</th><th>Totale anno</th><th>% sulle uscite</th></tr></thead>
       <tbody>
@@ -1014,6 +1083,21 @@ function drawAndamentoCharts(){
   }
 
   drawYearCompareChart(data, allYears);
+
+  // Grafico a torta: ripartizione spese per categoria nel Riepilogo Annuale
+  const pieCanvas = document.getElementById("catPieChart");
+  if (pieCanvas) {
+    const annoSelPie = state.riepilogoAnnoSel || Array.from(new Set(state.transazioni.map(t=>t.anno))).sort().pop();
+    const oggiPie = new Date();
+    const nonFuturoPie = (t) => t.anno < oggiPie.getFullYear() || (t.anno===oggiPie.getFullYear() && t.mese <= oggiPie.getMonth()+1);
+    const txAnnoPie = state.transazioni.filter(t=>t.anno===annoSelPie && nonFuturoPie(t));
+    const slices = state.categorie.map((cat,i) => ({
+      label: cat,
+      value: txAnnoPie.filter(t=>t.categoria===cat).reduce((s,t)=>s+t.importo,0),
+      color: colorForCat(cat, i)
+    })).filter(s => s.value > 0).sort((a,b) => b.value - a.value);
+    drawPieChart(pieCanvas, slices);
+  }
 }
 
 function percentile(sortedArr, p){
