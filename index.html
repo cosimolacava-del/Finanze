@@ -3181,8 +3181,10 @@ function setCloudStatus(s){
   if (el) el.textContent = s;
 }
 
+let ultimaModificaLocale = 0;
 function scheduleCloudSync(){
   if (!cloudReady || applyingRemoteUpdate) return;
+  ultimaModificaLocale = Date.now();
   clearTimeout(cloudSyncTimer);
   setCloudStatus("\u{1F504} sincronizzazione...");
   cloudSyncTimer = setTimeout(pushToCloud, 800);
@@ -3379,17 +3381,22 @@ function mergeArrayStringhe(locale, remoto){
 function applyRemoteData(data){
   applyingRemoteUpdate = true;
   const mancaSpeseTrimestrali = data.speseTrimestrali === undefined;
-  state.budgetAnnuale = mergeDizionarioAnnidato(state.budgetAnnuale, data.budgetAnnuale);
-  state.saldoConto = mergeDizionarioSemplice(state.saldoConto, data.saldoConto);
-  state.categorie = mergeArrayStringhe(state.categorie, data.categorie && data.categorie.length ? data.categorie : [...DEFAULT_CATEGORIE]);
-  state.categorieBudget = mergeArrayStringhe(state.categorieBudget, data.categorieBudget && data.categorieBudget.length ? data.categorieBudget : [...DEFAULT_CATEGORIE_BUDGET]);
-  state.vociEntrata = mergeArrayStringhe(state.vociEntrata, data.vociEntrata && data.vociEntrata.length ? data.vociEntrata : [...DEFAULT_VOCI_ENTRATA]);
-  state.ricorrenti = mergeRicorrenti(state.ricorrenti, data.ricorrenti);
+  // Chi ha modificato più di recente per davvero vince i conflitti diretti — non
+  // più "chi si sincronizza per ultimo", che poteva far tornare indietro una
+  // modifica genuinamente più recente fatta su un altro dispositivo.
+  const remotoPiuRecente = (data.lastUpdated || 0) > ultimaModificaLocale;
+  const f = (mergeFn, locale, remoto) => remotoPiuRecente ? mergeFn(remoto, locale) : mergeFn(locale, remoto);
+  state.budgetAnnuale = f(mergeDizionarioAnnidato, state.budgetAnnuale, data.budgetAnnuale);
+  state.saldoConto = f(mergeDizionarioSemplice, state.saldoConto, data.saldoConto);
+  state.categorie = f(mergeArrayStringhe, state.categorie, data.categorie && data.categorie.length ? data.categorie : [...DEFAULT_CATEGORIE]);
+  state.categorieBudget = f(mergeArrayStringhe, state.categorieBudget, data.categorieBudget && data.categorieBudget.length ? data.categorieBudget : [...DEFAULT_CATEGORIE_BUDGET]);
+  state.vociEntrata = f(mergeArrayStringhe, state.vociEntrata, data.vociEntrata && data.vociEntrata.length ? data.vociEntrata : [...DEFAULT_VOCI_ENTRATA]);
+  state.ricorrenti = f(mergeRicorrenti, state.ricorrenti, data.ricorrenti);
   // se il documento cloud non ha ancora questo campo (perché creato prima che esistesse questa
   // funzione), NON lo svuotiamo: teniamo il valore locale (già pre-impostato) e lo carichiamo su cloud.
-  if (!mancaSpeseTrimestrali) state.speseTrimestrali = mergeArrayPerId(state.speseTrimestrali, data.speseTrimestrali);
-  if (data.risparmioReset !== undefined) state.risparmioReset = data.risparmioReset;
-  if (data.stipendi !== undefined) state.stipendi = data.stipendi;
+  if (!mancaSpeseTrimestrali) state.speseTrimestrali = f(mergeArrayPerId, state.speseTrimestrali, data.speseTrimestrali);
+  if (data.risparmioReset !== undefined && remotoPiuRecente) state.risparmioReset = data.risparmioReset;
+  if (data.stipendi !== undefined && remotoPiuRecente) state.stipendi = data.stipendi;
   saveBudget(); saveSaldo(); saveCategorie(); saveCategorieBudget(); saveVociEntrata(); saveRicorrenti(); saveSpeseTrimestrali(); saveRisparmioReset(); saveStipendi();
   applyingRemoteUpdate = false;
   migraStipendiRpd(); // se i dati arrivati dal cloud sono in formato vecchio (senza scaglioni ufficiali), li aggiorna subito e li ripubblica corretti sul cloud
