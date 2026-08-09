@@ -661,11 +661,41 @@ function fmtCompact(v){
 }
 
 // ---------- rendering ----------
+// Costruisce un selettore stabile per un elemento, per poterlo ritrovare dopo
+// che il DOM è stato rigenerato da capo.
+function selettoreElemento(el){
+  if (el.id) return "#" + CSS.escape(el.id);
+  let sel = el.tagName.toLowerCase();
+  if (el.className) sel += "." + String(el.className).trim().split(/\s+/).filter(Boolean).map(c=>CSS.escape(c)).join(".");
+  Array.from(el.attributes).forEach(attr => {
+    if (attr.name.indexOf("data-")===0) sel += `[${attr.name}="${CSS.escape(attr.value)}"]`;
+  });
+  return sel;
+}
+
 function render(){
+  // Se l'utente sta scrivendo in un campo quando arriva un ridisegno causato da
+  // qualcos'altro (es. una sincronizzazione in arrivo, non collegata a quello che
+  // sta facendo), il DOM viene rigenerato da capo e quello che stava scrivendo
+  // — non ancora confermato — andrebbe perso. Lo salviamo prima e lo rimettiamo
+  // dopo, così un ridisegno "di passaggio" non cancella mai nulla che l'utente
+  // non abbia ancora confermato lui stesso.
+  const content = document.getElementById("content");
+  const activeEl = document.activeElement;
+  let daPreservare = null;
+  if (activeEl && content && content.contains(activeEl) && (activeEl.tagName==="INPUT" || activeEl.tagName==="TEXTAREA")) {
+    try {
+      daPreservare = {
+        selettore: selettoreElemento(activeEl),
+        valore: activeEl.value,
+        selStart: activeEl.selectionStart,
+        selEnd: activeEl.selectionEnd
+      };
+    } catch(e) { daPreservare = null; }
+  }
   renderTabs();
   document.getElementById("subtitle").textContent =
     "Il tuo registro finanziario — " + state.transazioni.length + " movimenti registrati.";
-  const content = document.getElementById("content");
   if (state.tab === "mese") content.innerHTML = renderMeseView();
   else if (state.tab === "andamento") content.innerHTML = renderAndamentoView();
   else if (state.tab === "budget") content.innerHTML = renderBudgetView();
@@ -675,6 +705,16 @@ function render(){
   else if (state.tab === "admin") content.innerHTML = renderAdminView();
   attachHandlers();
   if (state.tab === "andamento") drawAndamentoCharts();
+  if (daPreservare) {
+    try {
+      const el2 = content.querySelector(daPreservare.selettore);
+      if (el2) {
+        el2.value = daPreservare.valore;
+        el2.focus();
+        if (typeof daPreservare.selStart === "number" && el2.setSelectionRange) el2.setSelectionRange(daPreservare.selStart, daPreservare.selEnd);
+      }
+    } catch(e) { /* selettore non valido: ignora, non blocca il resto */ }
+  }
 }
 
 function renderTabs(){
