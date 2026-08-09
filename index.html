@@ -865,8 +865,15 @@ function renderMeseView(){
 function renderAndamentoView(){
   const years = Array.from(new Set(state.transazioni.map(t=>t.anno))).sort();
   const annoSel = state.riepilogoAnnoSel || years[years.length-1];
-  const txAnno = state.transazioni.filter(t=>t.anno===annoSel);
-  const mesiRegistrati = getMonthlySummary().filter(m=>m.anno===annoSel);
+  // Esclude mesi futuri rispetto a oggi (potrebbero avere già movimenti ricorrenti
+  // pre-generati se in passato si è navigato avanti nel calendario): non sono
+  // ancora "successi" davvero, non devono contare come mese migliore/peggiore o
+  // pesare sulle medie.
+  const oggiPerRiepilogo = new Date();
+  const oggiAnnoR = oggiPerRiepilogo.getFullYear(), oggiMeseR = oggiPerRiepilogo.getMonth()+1;
+  const nonFuturoR = (t) => t.anno < oggiAnnoR || (t.anno===oggiAnnoR && t.mese <= oggiMeseR);
+  const txAnno = state.transazioni.filter(t=>t.anno===annoSel && nonFuturoR(t));
+  const mesiRegistrati = getMonthlySummary().filter(m=>m.anno===annoSel && nonFuturoR(m));
   const usciteTotaliAnno = txAnno.filter(t=>t.categoria!=="Entrate").reduce((s,t)=>s+t.importo,0);
 
   const paceMedioRisparmioDisplay = paceMedioRisparmioRecente(6);
@@ -1322,23 +1329,31 @@ function renderBudgetView(){
   const totaleUscitePreviste = state.categorieBudget.reduce((s,c)=>s+(current[c]||0),0);
   const risparmioPrevisto = entratePreviste - totaleUscitePreviste;
 
-  const entrateReali = state.transazioni.filter(t=>t.anno===year && t.categoria==="Entrate").reduce((s,t)=>s+t.importo,0);
-  const usciteReali = state.transazioni.filter(t=>t.anno===year && t.categoria!=="Entrate").reduce((s,t)=>s+t.importo,0);
+  // "Reale (finora)" deve riflettere solo attività GIÀ accaduta: esclude mesi
+  // futuri rispetto a oggi anche se hanno già movimenti (es. ricorrenze
+  // pre-generate perché in passato si è navigato avanti nel calendario) — quei
+  // mesi non sono ancora "successi" davvero, non vanno contati come reali.
+  const oggi = new Date();
+  const oggiAnno = oggi.getFullYear(), oggiMese = oggi.getMonth()+1;
+  const nonFuturo = (t) => t.anno < oggiAnno || (t.anno===oggiAnno && t.mese <= oggiMese);
+
+  const entrateReali = state.transazioni.filter(t=>t.anno===year && t.categoria==="Entrate" && nonFuturo(t)).reduce((s,t)=>s+t.importo,0);
+  const usciteReali = state.transazioni.filter(t=>t.anno===year && t.categoria!=="Entrate" && nonFuturo(t)).reduce((s,t)=>s+t.importo,0);
   const risparmioReale = entrateReali - usciteReali;
 
-  const mesiRegistratiAnno = getMonthlySummary().filter(d=>d.anno===year).length || 1;
+  const mesiRegistratiAnno = getMonthlySummary().filter(d=>d.anno===year && nonFuturo(d)).length || 1;
   const fattoreProiezione = 12 / Math.min(mesiRegistratiAnno, 12);
   const proiezioneEntrate = entrateReali * fattoreProiezione;
   const proiezioneUscite = usciteReali * fattoreProiezione;
   const proiezioneRisparmio = proiezioneEntrate - proiezioneUscite;
 
   const mediaRealeCat = (cat) => {
-    const tot = state.transazioni.filter(t=>t.anno===year && t.categoria===cat).reduce((s,t)=>s+t.importo,0);
+    const tot = state.transazioni.filter(t=>t.anno===year && t.categoria===cat && nonFuturo(t)).reduce((s,t)=>s+t.importo,0);
     return tot / mesiRegistratiAnno;
   };
   const mediaRealeVoce = (voce) => {
     const vLower = voce.toLowerCase();
-    const tot = state.transazioni.filter(t=>t.anno===year && t.categoria==="Entrate" && t.descrizione.toLowerCase().includes(vLower)).reduce((s,t)=>s+t.importo,0);
+    const tot = state.transazioni.filter(t=>t.anno===year && t.categoria==="Entrate" && t.descrizione.toLowerCase().includes(vLower) && nonFuturo(t)).reduce((s,t)=>s+t.importo,0);
     return tot / mesiRegistratiAnno;
   };
 
