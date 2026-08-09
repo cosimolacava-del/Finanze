@@ -1115,7 +1115,9 @@ function percentile(sortedArr, p){
 // ============================================================
 function generaConsigli(){
   const consigli = [];
-  const data = getMonthlySummary();
+  const oggiConsigli = new Date();
+  const nonFuturoConsigli = (m) => m.anno < oggiConsigli.getFullYear() || (m.anno===oggiConsigli.getFullYear() && m.mese <= oggiConsigli.getMonth()+1);
+  const data = getMonthlySummary().filter(nonFuturoConsigli);
   if (data.length < 2) return consigli;
 
   const recenti = data.slice(-3);
@@ -1385,9 +1387,19 @@ function trimmedMean95(vals){
 
 function drawYearCompareChart(data, allYears){
   const selected = allYears.filter(y => state.andamentoYears.includes(y));
+  // I mesi futuri rispetto a oggi possono avere già un valore (es. ricorrenze
+  // pre-generate perché in passato si è navigato avanti nel calendario), ma non
+  // sono ancora "successi" davvero: non vanno disegnati come se lo fossero.
+  const oggiCompare = new Date();
+  const oggiAnnoCompare = oggiCompare.getFullYear(), oggiMeseCompare = oggiCompare.getMonth()+1;
+  const eFuturo = (anno, mese) => anno > oggiAnnoCompare || (anno===oggiAnnoCompare && mese > oggiMeseCompare);
   const byMonth = MESI.map((m,i) => {
     const row = {mese:m.slice(0,3)};
-    selected.forEach(y => { const rec = data.find(d=>d.anno===y && d.mese===i+1); row[y]= rec? rec.risparmio : null; });
+    selected.forEach(y => {
+      if (eFuturo(y, i+1)) { row[y] = null; return; }
+      const rec = data.find(d=>d.anno===y && d.mese===i+1);
+      row[y]= rec? rec.risparmio : null;
+    });
     return row;
   });
   const datasets = selected.map((y) => {
@@ -1396,7 +1408,7 @@ function drawYearCompareChart(data, allYears){
   });
   if (state.andamentoShowMedia && allYears.length > 0) {
     const byMonthAll = MESI.map((m,i) => {
-      const vals = allYears.map(y => { const rec = data.find(d=>d.anno===y && d.mese===i+1); return rec ? rec.risparmio : null; }).filter(v=>v!=null);
+      const vals = allYears.filter(y => !eFuturo(y, i+1)).map(y => { const rec = data.find(d=>d.anno===y && d.mese===i+1); return rec ? rec.risparmio : null; }).filter(v=>v!=null);
       return trimmedMean95(vals);
     });
     datasets.push({label:"Media storica (senza picchi)", data:byMonthAll, color: NAVY, width:3, dash:[7,4]});
