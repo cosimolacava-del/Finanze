@@ -404,11 +404,12 @@ let state = {
   pendingDeleteId: null,
   ricorrenti: [],
   speseTrimestrali: [],
+  obiettiviRisparmio: [10000,20000,30000],
   cestino: [],
   auditLog: []
 };
 
-const APP_VERSION = "2.1-sicurezza";
+const APP_VERSION = "2.2-obiettivi-liquidita";
 const CESTINO_GIORNI = 30;
 let modalitaPrudente=false;
 function operazioneDistruttivaConsentita(){
@@ -502,6 +503,11 @@ function loadState(){
   } catch(e){ state.risparmioReset = null; }
 
   try {
+    const ob = JSON.parse(localStorage.getItem("bilancio_obiettivi_risparmio") || "null");
+    state.obiettiviRisparmio = Array.isArray(ob) && ob.length ? ob.map(Number).filter(v=>v>0).slice(0,3).sort((a,b)=>a-b) : [10000,20000,30000];
+  } catch(e){ state.obiettiviRisparmio = [10000,20000,30000]; }
+
+  try {
     const sp = localStorage.getItem("bilancio_stipendi");
     state.stipendi = sp ? JSON.parse(sp) : defaultStipendiConfig();
     if (!sp) localStorage.setItem("bilancio_stipendi", JSON.stringify(state.stipendi));
@@ -527,6 +533,7 @@ function saveVociEntrata(){ localStorage.setItem("bilancio_voci_entrata", JSON.s
 function saveRicorrenti(){ localStorage.setItem("bilancio_ricorrenti", JSON.stringify(state.ricorrenti)); scheduleCloudSync(); }
 function saveSpeseTrimestrali(){ localStorage.setItem("bilancio_spese_trimestrali", JSON.stringify(state.speseTrimestrali)); scheduleCloudSync(); }
 function saveRisparmioReset(){ localStorage.setItem("bilancio_risparmio_reset", JSON.stringify(state.risparmioReset)); scheduleCloudSync(); }
+function saveObiettiviRisparmio(){ localStorage.setItem("bilancio_obiettivi_risparmio", JSON.stringify(state.obiettiviRisparmio)); scheduleCloudSync(); }
 function saveStipendi(){ localStorage.setItem("bilancio_stipendi", JSON.stringify(state.stipendi)); scheduleCloudSync(); }
 
 // Coda locale delle modifiche ai movimenti non ancora confermate dal server.
@@ -664,6 +671,41 @@ function riepilogoCassaMese(anno, mese){
     }
   });
   return {entrate, uscite, risparmio:entrate-uscite};
+}
+
+function datiObiettiviRisparmio(){
+  const saldi = Object.entries(state.saldoConto || {}).filter(([,v])=>v && Number.isFinite(Number(v.saldo))).sort((a,b)=>a[0].localeCompare(b[0]));
+  if (!saldi.length) return {saldo:null, media:null, periodo:null, obiettivi:[]};
+  const [periodo, ultimo] = saldi[saldi.length-1];
+  const [annoSaldo,meseSaldo] = periodo.split("-").map(Number);
+  const oggi=new Date(), ultimoConcluso=shiftMonth(oggi.getFullYear(),oggi.getMonth()+1,-1);
+  const indiceSaldo=annoSaldo*12+meseSaldo, indiceConcluso=ultimoConcluso.anno*12+ultimoConcluso.mese;
+  const fineMedia=indiceSaldo<indiceConcluso?{anno:annoSaldo,mese:meseSaldo}:ultimoConcluso;
+  const risparmi = [];
+  for(let i=0;i<6;i++){
+    const p=shiftMonth(fineMedia.anno,fineMedia.mese,-i);
+    risparmi.push(riepilogoCassaMese(p.anno,p.mese).risparmio);
+  }
+  const media = risparmi.reduce((s,v)=>s+v,0)/risparmi.length;
+  const saldo = Number(ultimo.saldo);
+  const obiettivi = (state.obiettiviRisparmio||[]).map(valore=>{
+    const raggiunto = saldo>=valore;
+    const mesi = raggiunto ? 0 : (media>0 ? Math.ceil((valore-saldo)/media) : null);
+    const data = mesi==null ? null : shiftMonth(annoSaldo,meseSaldo,mesi);
+    return {valore,raggiunto,mesi,data,pct:Math.max(0,Math.min(100,(saldo/valore)*100))};
+  });
+  return {saldo,media,periodo,obiettivi};
+}
+
+function renderObiettiviRisparmio(){
+  const d=datiObiettiviRisparmio();
+  const inputs=(state.obiettiviRisparmio||[10000,20000,30000]).map((v,i)=>`<div class="budget-input-wrap"><span>&euro;</span><input type="text" inputmode="decimal" class="obiettivo-risparmio-input" data-index="${i}" value="${v}" style="width:90px"></div>`).join('');
+  if(d.saldo==null) return `<div class="card" style="margin-bottom:20px;border:2px solid ${GOLD}"><div class="card-title-row"><h3 style="margin:0">&#127919; Obiettivi liquidità</h3></div><p class="sub">Inserisci almeno un saldo reale nella scheda “Saldo Conto” per calcolare l'avanzamento.</p><div style="display:flex;gap:8px;flex-wrap:wrap">${inputs}<button class="range-btn" id="salvaObiettiviBtn">Salva obiettivi</button></div></div>`;
+  const righe=d.obiettivi.map(o=>{
+    const previsione=o.raggiunto?`<b style="color:${GREEN}">Raggiunto</b>`:(o.data?`Stima: <b>${MESI[o.data.mese-1]} ${o.data.anno}</b> · circa ${o.mesi} mesi`:`<b style="color:${RUST}">Non stimabile con la media attuale</b>`);
+    return `<div style="margin-top:13px"><div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline"><b>Obiettivo ${eur(o.valore)}</b><span class="sub">${previsione}</span></div><div class="bar-bg" style="height:12px;margin-top:6px"><div class="bar-fill" style="width:${o.pct}%;height:12px;background:${o.raggiunto?GREEN:GOLD}"></div></div><div class="sub" style="text-align:right;margin-top:3px">${o.pct.toFixed(1)}%</div></div>`;
+  }).join('');
+  return `<div class="card" style="margin-bottom:20px;border:2px solid ${GREEN};box-shadow:0 5px 18px rgba(46,125,79,.10)"><div class="card-title-row"><h3 style="margin:0;font-size:18px">&#127919; Obiettivi liquidità</h3><div style="font-size:18px;font-weight:800;color:${GREEN}">${eur(d.saldo)} sul conto</div></div><p class="sub" style="margin:5px 0 10px">Media di cassa degli ultimi 6 mesi conclusi: <b style="color:${d.media>=0?GREEN:RUST}">${eur(d.media)}/mese</b>. Base: ultimo saldo reale disponibile (${d.periodo}).</p>${righe}<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:16px;padding-top:12px;border-top:1px solid var(--border-soft)"><span class="sub">Modifica obiettivi:</span>${inputs}<button class="range-btn" id="salvaObiettiviBtn">Salva</button></div></div>`;
 }
 
 // Calcola il ritmo medio di risparmio usando SOLO mesi effettivamente conclusi
@@ -1013,6 +1055,7 @@ function renderMeseView(){
     <div class="card summary-card"><div class="summary-label">Uscite</div><div class="summary-value" style="color:${RUST}">${eur(uscite)}</div>${pctBadge(pctUscite, false)}</div>
     <div class="card summary-card"><div class="summary-label">Risparmio</div><div class="summary-value" style="color:${risparmio>=0?GREEN:RUST}">${eur(risparmio)}</div>${pctBadge(pctRisparmio, true)}</div>
   </div>
+  ${renderObiettiviRisparmio()}
   <div style="margin-bottom:26px">
     <button id="reportPdfBtnHome" style="width:100%;display:flex;align-items:center;justify-content:center;gap:10px;padding:14px;border-radius:10px;border:none;cursor:pointer;font-size:14px;font-weight:700;font-family:inherit;background:${scostamentiMese.length ? RUST : NAVY};color:#fff">
       ${scostamentiMese.length ? `&#9888; ${scostamentiMese.length} scostament${scostamentiMese.length===1?'o':'i'} ${scostamentiMese.length===1?'importante':'importanti'} dal budget — genera il report PDF` : `&#128196; Genera report PDF del mese`}
@@ -2635,6 +2678,12 @@ function attachHandlers(){
     const openAdd = document.getElementById("openAdd");
     const reportBtnHome = document.getElementById("reportPdfBtnHome");
     if (reportBtnHome) reportBtnHome.onclick = apriModalScostamenti;
+    const salvaObiettiviBtn=document.getElementById("salvaObiettiviBtn");
+    if(salvaObiettiviBtn) salvaObiettiviBtn.onclick=()=>{
+      const valori=Array.from(document.querySelectorAll(".obiettivo-risparmio-input")).map(i=>parseImporto(i.value)).filter(v=>Number.isFinite(v)&&v>0).slice(0,3).sort((a,b)=>a-b);
+      if(!valori.length){alert("Inserisci almeno un obiettivo valido.");return;}
+      state.obiettiviRisparmio=valori; saveObiettiviRisparmio(); registraAudit("Obiettivi liquidità aggiornati", valori.map(eur).join(", ")); render();
+    };
     if (openAdd) openAdd.onclick = () => openModalFor(null);
     document.querySelectorAll("[data-edit-tx]").forEach(b => {
       b.onclick = () => {
@@ -3047,7 +3096,7 @@ function attachHandlers(){
           transazioni: [], budgetAnnuale: {}, saldoConto: {},
           categorie: [...DEFAULT_CATEGORIE], categorieBudget: [...DEFAULT_CATEGORIE_BUDGET],
           vociEntrata: [...DEFAULT_VOCI_ENTRATA], ricorrenti: [], speseTrimestrali: [],
-          risparmioReset: null, stipendi: defaultStipendiConfig()
+          risparmioReset: null, obiettiviRisparmio: [10000,20000,30000], stipendi: defaultStipendiConfig()
         };
         applicaBackupEsatto(vuoto);
         localStorage.setItem("bilancio_dati_azzerati", "1");
@@ -3259,6 +3308,9 @@ function esportaCSV(year){
 
 function contenutoBackup(data){
   const x={}; ["transazioni","budgetAnnuale","saldoConto","categorie","categorieBudget","vociEntrata","ricorrenti","speseTrimestrali","risparmioReset","stipendi","cestino","auditLog"].forEach(k=>x[k]=data[k]===undefined?null:data[k]);
+  // Campo introdotto dopo i primi backup con checksum: se assente non viene
+  // aggiunto, così i backup storici continuano a superare la verifica.
+  if(data.obiettiviRisparmio!==undefined) x.obiettiviRisparmio=data.obiettiviRisparmio;
   return x;
 }
 async function checksumBackup(data){ return sha256(JSON.stringify(contenutoBackup(data))); }
@@ -3312,6 +3364,7 @@ function applicaBackupEsatto(data){
   state.ricorrenti = Array.isArray(data.ricorrenti) ? data.ricorrenti : [];
   state.speseTrimestrali = normalizzaSpeseTrimestrali(data.speseTrimestrali || []);
   state.risparmioReset = data.risparmioReset || null;
+  state.obiettiviRisparmio = Array.isArray(data.obiettiviRisparmio) && data.obiettiviRisparmio.length ? data.obiettiviRisparmio : [10000,20000,30000];
   state.stipendi = data.stipendi || defaultStipendiConfig();
   state.cestino = Array.isArray(data.cestino) ? data.cestino : [];
   state.auditLog = Array.isArray(data.auditLog) ? data.auditLog : [];
@@ -3325,6 +3378,7 @@ function applicaBackupEsatto(data){
   localStorage.setItem("bilancio_ricorrenti", JSON.stringify(state.ricorrenti));
   localStorage.setItem("bilancio_spese_trimestrali", JSON.stringify(state.speseTrimestrali));
   localStorage.setItem("bilancio_risparmio_reset", JSON.stringify(state.risparmioReset));
+  localStorage.setItem("bilancio_obiettivi_risparmio", JSON.stringify(state.obiettiviRisparmio));
   localStorage.setItem("bilancio_stipendi", JSON.stringify(state.stipendi));
   localStorage.setItem("bilancio_cestino", JSON.stringify(state.cestino));
   localStorage.setItem("bilancio_audit_log", JSON.stringify(state.auditLog));
@@ -3639,6 +3693,7 @@ async function pushToCloud(){
       ricorrenti: state.ricorrenti,
       speseTrimestrali: state.speseTrimestrali,
       risparmioReset: state.risparmioReset,
+      obiettiviRisparmio: state.obiettiviRisparmio,
       stipendi: state.stipendi,
       cestino: state.cestino,
       auditLog: state.auditLog,
@@ -3926,13 +3981,14 @@ function applyRemoteData(data){
       state.speseTrimestrali = pulite;
     }
     if (data.risparmioReset !== undefined) state.risparmioReset = data.risparmioReset;
+    if (Array.isArray(data.obiettiviRisparmio) && data.obiettiviRisparmio.length) state.obiettiviRisparmio = data.obiettiviRisparmio;
     if (data.stipendi !== undefined) state.stipendi = data.stipendi;
     if (Array.isArray(data.cestino)) state.cestino = data.cestino;
     if (Array.isArray(data.auditLog)) state.auditLog = data.auditLog;
   }
   localStorage.setItem("bilancio_cestino",JSON.stringify(state.cestino));
   localStorage.setItem("bilancio_audit_log",JSON.stringify(state.auditLog));
-  saveBudget(); saveSaldo(); saveCategorie(); saveCategorieBudget(); saveVociEntrata(); saveRicorrenti(); saveSpeseTrimestrali(); saveRisparmioReset(); saveStipendi();
+  saveBudget(); saveSaldo(); saveCategorie(); saveCategorieBudget(); saveVociEntrata(); saveRicorrenti(); saveSpeseTrimestrali(); saveRisparmioReset(); saveObiettiviRisparmio(); saveStipendi();
   applyingRemoteUpdate = false;
   migraStipendiRpd(); // se i dati arrivati dal cloud sono in formato vecchio (senza scaglioni ufficiali), li aggiorna subito e li ripubblica corretti sul cloud
   generaMovimentiRicorrenti();
@@ -4020,6 +4076,7 @@ function statoCompleto(){
     ricorrenti: state.ricorrenti,
     speseTrimestrali: state.speseTrimestrali,
     risparmioReset: state.risparmioReset,
+    obiettiviRisparmio: state.obiettiviRisparmio,
     stipendi: state.stipendi
     ,cestino: state.cestino
     ,auditLog: state.auditLog
