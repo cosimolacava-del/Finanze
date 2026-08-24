@@ -352,6 +352,17 @@ function fmtDataOra(ts){ if (!ts) return null; return new Date(ts).toLocaleStrin
 function ordinaPerRecenti(arr){
   const indiceSeed = (t) => (t.id && t.id.indexOf("seed-")===0) ? parseInt(t.id.slice(5), 10) : -1;
   return arr.slice().sort((a,b) => {
+    // Le ricorrenze sono generate automaticamente: createdAt indica quando il
+    // browser le ha materializzate, non quando l'utente le ha registrate. Non
+    // devono quindi scavalcare i movimenti inseriti davvero a mano.
+    const autoA = !!a.ricorrenteGruppo, autoB = !!b.ricorrenteGruppo;
+    if (autoA !== autoB) return autoA ? 1 : -1;
+    if (autoA && autoB) {
+      const periodoA = (Number(a.anno)||0)*10000 + (Number(a.mese)||0)*100 + (Number(a.giorno)||0);
+      const periodoB = (Number(b.anno)||0)*10000 + (Number(b.mese)||0)*100 + (Number(b.giorno)||0);
+      if (periodoA !== periodoB) return periodoB - periodoA;
+      return String(a.descrizione||"").localeCompare(String(b.descrizione||""), "it");
+    }
     const ca = a.createdAt || 0, cb = b.createdAt || 0;
     if (ca !== cb) return cb - ca;
     return indiceSeed(b) - indiceSeed(a);
@@ -581,7 +592,7 @@ function generaMovimentiRicorrenti(){
       if (!exists){
         const nuovo = {
           id: idDeterministico, anno:y, mese:m, categoria:rule.categoria, descrizione:rule.descrizione,
-          importo: rule.importo, ricorrenteGruppo: rule.gruppoId, createdAt: Date.now(), updatedAt: Date.now()
+          importo: rule.importo, ricorrenteGruppo: rule.gruppoId, generatedAt: Date.now()
         };
         state.transazioni.push(nuovo);
         nuoviGenerati.push(nuovo);
@@ -942,15 +953,15 @@ function renderMeseView(){
   const txRow = (t) => {
     const isE = t.categoria==="Entrate";
     const infoTitle = [
-      t.createdAt ? `Inserito: ${fmtDataOra(t.createdAt)}` : '',
-      (t.updatedAt && t.updatedAt !== t.createdAt) ? `Modificato: ${fmtDataOra(t.updatedAt)}` : ''
+      (!t.ricorrenteGruppo && t.createdAt) ? `Inserito: ${fmtDataOra(t.createdAt)}` : '',
+      (!t.ricorrenteGruppo && t.updatedAt && t.updatedAt !== t.createdAt) ? `Modificato: ${fmtDataOra(t.updatedAt)}` : ''
     ].filter(Boolean).join(' — ');
-    const dataInserimentoBreve = t.createdAt ? new Date(t.createdAt).toLocaleDateString("it-IT", {day:"2-digit",month:"2-digit",year:"numeric"}) : null;
+    const dataInserimentoBreve = (!t.ricorrenteGruppo && t.createdAt) ? new Date(t.createdAt).toLocaleDateString("it-IT", {day:"2-digit",month:"2-digit",year:"numeric"}) : null;
     return `<div class="tx-item ${isE?'entrata':'uscita'}" ${infoTitle?`title="${escapeHtml(infoTitle)}"`:''}>
       <div style="min-width:0">
         <div class="tx-desc">${t.giorno?`<span style="color:${NAVY};font-weight:600">${String(t.giorno).padStart(2,'0')}</span> `:''}${t.ricorrenteGruppo?'&#128257; ':''}${escapeHtml(t.descrizione)}${t.allegatoId?` <a href="#" data-open-allegato="${t.allegatoId}" title="${escapeHtml(t.allegatoNome||'Allegato')}" style="text-decoration:none">&#128206;</a>`:''}</div>
         <div class="tx-cat">${escapeHtml(t.categoria)}${etichettaStato(t)}${showDateBadge?' · '+MESI[t.mese-1].slice(0,3)+' '+t.anno:''}</div>
-        ${dataInserimentoBreve ? `<div style="font-size:11px;color:#8A8072;margin-top:2px">Registrato il ${dataInserimentoBreve}</div>` : ''}
+        ${t.ricorrenteGruppo ? `<div style="font-size:11px;color:#8A8072;margin-top:2px">Generata automaticamente</div>` : (dataInserimentoBreve ? `<div style="font-size:11px;color:#8A8072;margin-top:2px">Registrato il ${dataInserimentoBreve}</div>` : '')}
       </div>
       <div style="display:flex;align-items:center;gap:6px">
         <span class="tx-amt ${isE?'entrata':'uscita'}">${isE?'+':'\u2212'}${eur(t.importo)}</span>
