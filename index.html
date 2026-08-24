@@ -370,6 +370,14 @@ function ordinaPerRecenti(arr){
 }
 function monthKey(y,m){ return y+"-"+String(m).padStart(2,"0"); }
 function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+function shiftMonth(anno, mese, delta){
+  const d = new Date(anno, mese-1+delta, 1);
+  return {anno:d.getFullYear(), mese:d.getMonth()+1};
+}
+function entrataPrevistaMese(budget, voce, mese){
+  const ordinaria = (budget["ENT::"+voce] || 0) / 12;
+  return ordinaria + (mese === 12 ? (budget["13::"+voce] || 0) : 0);
+}
 
 // ---------- state ----------
 let state = {
@@ -635,6 +643,27 @@ function aggiustamentoTrimestraleUscite(anno, mese){
     delta += (realeDelMese - registrato);
   });
   return delta;
+}
+
+function riepilogoCassaMese(anno, mese){
+  const entrate = state.transazioni.filter(t => t.anno===anno && t.mese===mese && t.categoria==="Entrate").reduce((s,t)=>s+t.importo,0);
+  const configurazioni = normalizzaSpeseTrimestrali(state.speseTrimestrali || []);
+  const eTrimestrale = t => configurazioni.find(cfg => String(t.descrizione||"").toLowerCase().includes(String(cfg.descrizioneMatch||"").toLowerCase()));
+  let uscite = 0;
+  state.transazioni.filter(t=>t.categoria!=="Entrate").forEach(t => {
+    if (eTrimestrale(t)) return;
+    const addebito = t.amex ? shiftMonth(t.anno,t.mese,1) : {anno:t.anno,mese:t.mese};
+    if (addebito.anno===anno && addebito.mese===mese) uscite += t.importo;
+  });
+  configurazioni.forEach(cfg => {
+    const diff = (anno*12+mese) - (cfg.prossimaRataAnno*12+cfg.prossimaRataMese);
+    if ((((diff%3)+3)%3)!==0) return;
+    for(let indietro=0; indietro<3; indietro++){
+      const periodo=shiftMonth(anno,mese,-indietro);
+      uscite += state.transazioni.filter(t => t.categoria!=="Entrate" && t.anno===periodo.anno && t.mese===periodo.mese && String(t.descrizione||"").toLowerCase().includes(String(cfg.descrizioneMatch||"").toLowerCase())).reduce((s,t)=>s+t.importo,0);
+    }
+  });
+  return {entrate, uscite, risparmio:entrate-uscite};
 }
 
 // Calcola il ritmo medio di risparmio usando SOLO mesi effettivamente conclusi
@@ -916,7 +945,7 @@ function renderMeseView(){
   const scostamentiMese = calcolaScostamenti(state.selYear, state.selMonth);
 
   const budgetCorrente = state.budgetAnnuale[state.selYear] || {};
-  const entratePreviste = state.vociEntrata.reduce((s,v)=>s+(budgetCorrente["ENT::"+v]||0),0) / 12;
+  const entratePreviste = state.vociEntrata.reduce((s,v)=>s+entrataPrevistaMese(budgetCorrente,v,state.selMonth),0);
   const uscitePreviste = state.categorieBudget.reduce((s,c)=>s+(budgetCorrente[c]||0),0) / 12;
   const risparmioPrevisto = entratePreviste - uscitePreviste;
   const pctVar = (reale, previsto) => (!previsto) ? null : ((reale - previsto) / Math.abs(previsto)) * 100;
@@ -960,7 +989,7 @@ function renderMeseView(){
     return `<div class="tx-item ${isE?'entrata':'uscita'}" ${infoTitle?`title="${escapeHtml(infoTitle)}"`:''}>
       <div style="min-width:0">
         <div class="tx-desc">${t.giorno?`<span style="color:${NAVY};font-weight:600">${String(t.giorno).padStart(2,'0')}</span> `:''}${t.ricorrenteGruppo?'&#128257; ':''}${escapeHtml(t.descrizione)}${t.allegatoId?` <a href="#" data-open-allegato="${t.allegatoId}" title="${escapeHtml(t.allegatoNome||'Allegato')}" style="text-decoration:none">&#128206;</a>`:''}</div>
-        <div class="tx-cat">${escapeHtml(t.categoria)}${etichettaStato(t)}${showDateBadge?' · '+MESI[t.mese-1].slice(0,3)+' '+t.anno:''}</div>
+        <div class="tx-cat">${escapeHtml(t.categoria)}${t.amex?' · Amex (addebito mese successivo)':''}${etichettaStato(t)}${showDateBadge?' · '+MESI[t.mese-1].slice(0,3)+' '+t.anno:''}</div>
         ${t.ricorrenteGruppo ? `<div style="font-size:11px;color:#8A8072;margin-top:2px">Generata automaticamente</div>` : (dataInserimentoBreve ? `<div style="font-size:11px;color:#8A8072;margin-top:2px">Registrato il ${dataInserimentoBreve}</div>` : '')}
       </div>
       <div style="display:flex;align-items:center;gap:6px">
@@ -1526,7 +1555,7 @@ function renderBudgetView(){
   const years = getYears();
   const year = state.budgetYear || years[years.length-2] || years[0];
   const current = state.budgetAnnuale[year] || {};
-  const entratePreviste = state.vociEntrata.reduce((s,v)=>s+(current["ENT::"+v]||0),0);
+  const entratePreviste = state.vociEntrata.reduce((s,v)=>s+(current["ENT::"+v]||0)+(current["13::"+v]||0),0);
   const totaleUscitePreviste = state.categorieBudget.reduce((s,c)=>s+(current[c]||0),0);
   const risparmioPrevisto = entratePreviste - totaleUscitePreviste;
 
@@ -1567,7 +1596,8 @@ function renderBudgetView(){
     ${state.vociEntrata.length===0 ? '<p class="empty">Nessuna voce di entrata configurata. Vai in Admin per aggiungerne una.</p>' : state.vociEntrata.map(v => {
       const media = mediaRealeVoce(v);
       const prevMensile = (current["ENT::"+v]||0)/12;
-      const prevAnnuo = current["ENT::"+v]||0;
+      const tredicesima = current["13::"+v]||0;
+      const prevAnnuo = (current["ENT::"+v]||0) + tredicesima;
       const diff = media - prevMensile;
       return `<div class="budget-item" style="flex-direction:column;align-items:stretch;gap:6px">
         <div style="display:flex;justify-content:space-between;align-items:center">
@@ -1577,6 +1607,10 @@ function renderBudgetView(){
               <input type="text" inputmode="decimal" class="budget-entrata-input" data-voce="${escapeHtml(v)}" value="${prevMensile? (Math.round(prevMensile*100)/100) : ''}" placeholder="0" style="border-color:${GREEN}"></div>
             <span class="sub">/mese</span>
           </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span class="sub">Tredicesima netta (accredito a dicembre)</span>
+          <div class="budget-input-wrap"><span>&euro;</span><input type="text" inputmode="decimal" class="budget-tredicesima-input" data-voce="${escapeHtml(v)}" value="${tredicesima?String(tredicesima).replace('.',','):''}" placeholder="0" style="border-color:${GREEN}"></div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:11px">
           <span style="color:${diff>=0?GREEN:RUST}">media reale: ${eur(media)}/mese</span>
@@ -1655,8 +1689,9 @@ function renderSaldoView(){
     const prevK = idx>0 ? sortedKeys[idx-1] : null;
     const prevSaldo = prevK && state.saldoConto[prevK] ? state.saldoConto[prevK].saldo : null;
     const variazione = (saldo!=null && prevSaldo!=null) ? saldo - prevSaldo : null;
-    const delta = aggiustamentoTrimestraleUscite(m.anno, m.mese);
-    const risparmioAggiustato = m.risparmio - delta;
+    const cassa = riepilogoCassaMese(m.anno, m.mese);
+    const delta = m.risparmio - cassa.risparmio;
+    const risparmioAggiustato = cassa.risparmio;
     const diff = variazione!=null ? variazione - risparmioAggiustato : null;
     let esito = null;
     if (diff != null) {
@@ -1678,7 +1713,7 @@ function renderSaldoView(){
   <div class="card">
     <h3>Saldo Conto — riconciliazione mensile</h3>
     <p class="sub" style="margin-top:-8px;margin-bottom:6px">Ogni fine mese scrivi il saldo reale del conto. Il sistema controlla da solo se combacia con i movimenti registrati.</p>
-    ${state.speseTrimestrali.length ? `<p class="sub" style="margin-top:0;margin-bottom:18px">* Il risparmio teorico è aggiustato per le spese pagate a rate trimestrali (es. mutuo) — vedi Admin per configurarle.</p>` : ''}
+    <p class="sub" style="margin-top:0;margin-bottom:18px">* Il risparmio teorico segue i movimenti effettivi del conto: Amex nel mese successivo e mutuo nei mesi gennaio, aprile, luglio e ottobre.</p>
     <table>
       <thead><tr><th>Mese</th><th>Saldo reale</th><th>Variazione</th><th>Risparmio teorico</th><th>Differenza</th><th>Esito</th></tr></thead>
       <tbody>${rowsHtml}</tbody>
@@ -2336,6 +2371,7 @@ function renderAddModal(editTx){
         <input type="text" id="formDescrizione" placeholder="Descrizione" value="${escapeHtml(descrizione)}" list="descrizioneSuggestions" autocomplete="off">
         <datalist id="descrizioneSuggestions"></datalist>
         <input type="text" inputmode="decimal" id="formImporto" placeholder="Importo &euro; (es. 50,00)" value="${importo!==""?String(importo).replace('.',','):''}">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:${NAVY}"><input type="checkbox" id="formAmex" ${editTx&&editTx.amex?'checked':''}> Pagato con American Express <span class="sub">(addebito sul conto il mese successivo)</span></label>
         <div id="formBudgetWarning"></div>
         ${isEdit && (editTx.createdAt || editTx.updatedAt) ? `
           <p class="sub" style="margin:0">
@@ -2544,6 +2580,7 @@ function attachHandlers(){
         const categoria = document.getElementById("formCategoria").value;
         const descrizione = document.getElementById("formDescrizione").value.trim();
         const importo = parseImporto(document.getElementById("formImporto").value);
+        const amex = document.getElementById("formAmex").checked && categoria!=="Entrate";
         if (!descrizione) { alert("Scrivi una descrizione."); return; }
         if (!importo || isNaN(importo)) { alert("Inserisci un importo valido (es. 50,00)."); return; }
         const editId = document.getElementById("submitAdd").dataset.editId;
@@ -2555,11 +2592,11 @@ function attachHandlers(){
         if (editId) {
           target = state.transazioni.find(x => x.id === editId);
           if (target) {
-            target.anno=anno; target.mese=mese; target.categoria=categoria; target.descrizione=descrizione; target.importo=importo; target.updatedAt = Date.now();
+            target.anno=anno; target.mese=mese; target.categoria=categoria; target.descrizione=descrizione; target.importo=importo; target.amex=amex; target.updatedAt = Date.now();
             if (giorno) target.giorno = giorno; else delete target.giorno;
           }
         } else {
-          target = {id:uid(), anno, mese, categoria, descrizione, importo, createdAt: Date.now(), updatedAt: Date.now()};
+          target = {id:uid(), anno, mese, categoria, descrizione, importo, amex, createdAt: Date.now(), updatedAt: Date.now()};
           if (giorno) target.giorno = giorno;
           state.transazioni.push(target);
         }
@@ -2632,6 +2669,15 @@ function attachHandlers(){
         const mensile = parseImporto(e.target.value) || 0;
         const year = state.budgetYear;
         state.budgetAnnuale[year] = {...(state.budgetAnnuale[year]||{}), ["ENT::"+voce]: mensile*12};
+        saveBudget(); render();
+      };
+    });
+    document.querySelectorAll(".budget-tredicesima-input").forEach(inp => {
+      inp.onchange = e => {
+        const voce = inp.dataset.voce;
+        const importo = parseImporto(e.target.value) || 0;
+        const year = state.budgetYear;
+        state.budgetAnnuale[year] = {...(state.budgetAnnuale[year]||{}), ["13::"+voce]: importo};
         saveBudget(); render();
       };
     });
@@ -3524,7 +3570,7 @@ function calcolaScostamenti(year, mese){
     if (diff > soglia) out.push({voce:cat, tipo:"uscita", previsto, reale, diff, pct: (diff/previsto)*100});
   });
   state.vociEntrata.forEach(v => {
-    const previsto = (current["ENT::"+v]||0)/12;
+    const previsto = entrataPrevistaMese(current,v,mese);
     if (!previsto) return;
     const reale = state.transazioni.filter(t=>t.anno===year && t.mese===mese && t.categoria==="Entrate" && t.descrizione.toLowerCase().includes(v.toLowerCase())).reduce((s,t)=>s+t.importo,0);
     const diff = reale - previsto; // negativo = hai incassato meno del previsto (male)
