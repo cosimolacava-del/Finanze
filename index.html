@@ -19,6 +19,7 @@ h1{font-family:ui-serif,Georgia,serif;font-size:28px;font-weight:700;margin:0;le
 .tabs{display:flex;gap:4px;flex-wrap:wrap;}
 .tab-btn{display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:6px;border:1px solid var(--border-soft);background:transparent;color:var(--navy);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;}
 .tab-btn.active{background:var(--navy);color:#fff;border-color:var(--navy);}
+.tab-btn:focus-visible,.nav-btn:focus-visible,.add-btn:focus-visible,.range-btn:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid rgba(184,134,11,.35);outline-offset:2px;}
 .card{background:#fff;border:1px solid var(--border);border-radius:10px;padding:18px;}
 .card h3{font-family:ui-serif,Georgia,serif;font-size:16px;font-weight:700;margin:0 0 14px;color:var(--navy);}
 .month-nav{display:flex;align-items:center;justify-content:center;gap:18px;margin-bottom:24px;}
@@ -32,6 +33,21 @@ h1{font-family:ui-serif,Georgia,serif;font-size:28px;font-weight:700;margin:0;le
 .three-col{display:grid;grid-template-columns:0.85fr 1fr 1fr;gap:16px;align-items:start;}
 @media (max-width:900px){.three-col{grid-template-columns:1fr 1fr;}}
 @media (max-width:820px){.two-col{grid-template-columns:1fr;} .summary-grid{grid-template-columns:1fr;} .three-col{grid-template-columns:1fr;}}
+@media (max-width:700px){
+  .wrap{padding:18px 12px 64px;}
+  .header-row{display:block;}
+  h1{font-size:25px;margin-bottom:12px;}
+  .tabs{flex-wrap:nowrap;overflow-x:auto;padding-bottom:5px;scrollbar-width:none;-webkit-overflow-scrolling:touch;}
+  .tabs::-webkit-scrollbar{display:none;}
+  .tab-btn{flex:0 0 auto;white-space:nowrap;}
+  .card{padding:14px;overflow-x:auto;}
+  .month-nav{gap:10px;margin-bottom:18px;}
+  .summary-value{font-size:23px;}
+  table{min-width:620px;}
+  .tx-list{max-height:460px;overscroll-behavior:contain;}
+  .tx-desc{max-width:180px;}
+  #reminderBanner{align-items:flex-start;}
+}
 .cat-row{margin-bottom:12px;}
 .cat-row-top{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;}
 .cat-name{font-weight:600;}
@@ -93,6 +109,10 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
 #printReport{display:none;}
 #lockScreen.hidden{display:none;}
 #lockScreen{position:fixed;inset:0;background:var(--cream);z-index:200;display:flex;align-items:center;justify-content:center;}
+#firebaseAuthScreen.hidden{display:none;}
+#firebaseAuthScreen{position:fixed;inset:0;background:var(--cream);z-index:300;display:flex;align-items:center;justify-content:center;padding:20px;}
+.auth-card{background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 40px rgba(31,45,61,.14);padding:26px;width:min(390px,100%);}
+.auth-card input{width:100%;box-sizing:border-box;margin:6px 0;padding:11px;border:1px solid var(--border);border-radius:7px;font:inherit;}
 .lock-box{background:#fff;border:1px solid var(--border);border-radius:12px;padding:32px;width:320px;max-width:90vw;text-align:center;}
 .lock-box h2{font-family:ui-serif,Georgia,serif;margin:0 0 6px;color:var(--navy);}
 .lock-box p{font-size:12px;color:var(--muted);margin:0 0 18px;}
@@ -124,6 +144,7 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
 </style>
 </head>
 <body>
+<div id="firebaseAuthScreen" class="hidden"></div>
 <div id="lockScreen" class="hidden"></div>
 <div class="wrap">
   <div class="header-row">
@@ -133,7 +154,7 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
     <div class="tabs" id="tabs"></div>
   </div>
   <p class="sub" id="subtitle"></p>
-  <p class="sub" id="cloudStatusLine">Cloud: <span id="cloudStatus">connessione...</span></p>
+  <p class="sub" id="cloudStatusLine">Cloud: <span id="cloudStatus" role="status" aria-live="polite">accesso richiesto</span> <span id="firebaseUserLabel"></span> <button id="firebaseLogoutBtn" class="range-btn" style="display:none;margin-left:6px">Esci</button></p>
   <div id="reminderBanner" class="hidden"></div>
   <div id="content"></div>
 </div>
@@ -141,10 +162,11 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
 <div class="footer-note">Web app indipendente — dati sincronizzati su cloud privato (Firestore) e in copia locale su questo dispositivo.</div>
 
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 <script>
-const TX_SEED = [[2019,11,"Entrate","Stipendio Chiara",1200.0],[2019,11,"Entrate","Stipendio Cosimo",2035.0],[2019,11,"Varie","Dropbox+Amazon Prime",15.83],[2019,11,"Palestra ETATO","Palestra Eta/Eto",61.66],[2019,11,"Spesa","Spesa settimanale",126.0],[2019,11,"Varie","Libro",20.0],[2019,11,"Varie","Farmacia",25.0],[2019,11,"Svago","Cinema+panino",25.0],[2019,11,"Spesa","Spesa cereali lab",10.0],[2019,11,"Varie","Maschera antismog",22.0],[2019,11,"Spesa","Spessa infrasettimanale",19.0],[2019,11,"Varie","Tagliacapelli",66.0],[2019,11,"Spesa","Spesa settimanale",115.0],[2019,11,"Varie","Pigiametix",37.0],[2019,11,"Palestra ETATO","Yoga",150.0],[2019,11,"Spesa","Spesa",130.0],[2019,11,"Svago","Aperitivo",10.0],[2019,11,"Spesa","Spesa Cosimo Lab",14.0],[2019,11,"Varie","Olio bici",19.0],[2019,11,"Svago","Cena sushi+aperitivo",60.0],[2019,11,"Svago","Apolf",20.0],[2019,11,"Varie","Saponi",13.0],[2019,11,"Spesa","Spesa settimanale",84.0],[2019,11,"Spesa","Spesa infrasettimanale",20.0],[2019,11,"Auto","Benzina",61.0],[2019,11,"Varie","Libri",54.0],[2019,11,"Varie","ORdine Aamazon lab e luci",30.0],[2019,11,"Varie","ragazzi",10.0],[2019,11,"Spesa","spesa extra",18.0],[2019,11,"Spesa","Spesa",92.0],[2019,11,"Varie","Bici",40.0],[2019,11,"Svago","Milano",65.0],[2019,12,"Entrate","Stipendio Chiara",900.0],[2019,12,"Entrate","Stipendio Cosimo",2450.0],[2019,12,"Varie","Dropbox+Amazon Prime",15.83],[2019,12,"Palestra ETATO","Palestra Eta/Eto",61.66],[2019,12,"Spesa","Spesa settimanale",107.0],[2019,12,"Svago","Godano",62.0],[2019,12,"Spesa","Shampoo",10.0],[2019,12,"Svago","Cinema",21.0],[2019,12,"Svago","Cena",32.0],[2019,12,"Varie","Wishy",250.0],[2019,12,"Spesa","Pollo+ravioli",16.0],[2019,12,"Svago","Abate",41.0],[2019,12,"Varie","Scrub",15.0],[2019,12,"Spesa","Spesa",89.0],[2019,12,"Auto","Benzina",71.0],[2019,12,"Varie","Pacco",83.0],[2019,12,"Svago","Cena sub",60.0],[2019,12,"Varie","Albero e carta",19.0],[2019,12,"Spesa","Shampoo",35.0],[2019,12,"Spesa","Spesa",87.0],[2019,12,"Varie","Regaleto",54.0],[2019,12,"Varie","Regalo Martina",85.0],[2019,12,"Svago","Cena Milano",33.0],[2019,12,"Svago","Libri",45.0],[2019,12,"Svago","Vacanza Natale",184.0],[2020,2,"Entrate","Stipendio Chiara",1306.0],[2020,2,"Entrate","Stipendio Cosimo",2700.0],[2020,2,"TV/internet/Cell","Cellulari abb",20.0],[2020,2,"Elettricità/Gas","Elettricita/Gas",120.0],[2020,2,"TV/internet/Cell","TV + Internet",30.0],[2020,2,"Casa","Mutuo",480.0],[2020,2,"Varie","Dropbox+Amazon Prime",15.83],[2020,2,"Casa","Acqua",20.0],[2020,2,"Palestra ETATO","Palestra Eta/Eto",61.66],[2020,2,"Casa","Spese condominiali",46.67],[2020,2,"Casa","Ass Casa+AssVita",65.0],[2020,2,"Spesa","Spesa settimanale",120.0],[2020,2,"Varie","Dietologa",100.0],[2020,2,"Spesa","Spesa lab",20.0],[2020,2,"Spesa","Spesa bio",22.0],[2020,2,"Spesa","Spesa settimanale",125.0],[2020,2,"Svago","Cena fuori",77.0],[2020,2,"Spesa","Spesa settimanale",120.0],[2020,2,"Spesa","Spesa settimanale",90.0],[2020,2,"Spesa","Spesa infrasettimanale",20.0],[2020,2,"Spesa","Ordine Amazon (Caffe e Colla)",27.0],[2020,2,"Spesa","Spesa extra",40.0],[2020,2,"Spesa","Spesa settimanale",130.0],[2020,2,"Varie","Libri",50.0],[2020,2,"Varie","Tisane",53.0],[2020,2,"Varie","Mera",270.0],[2020,2,"Varie","Spesa ufficio",20.0],[2020,2,"Svago","Pranzo valerio",20.0],[2020,2,"Varie","Zanzariera",53.0],[2020,2,"Varie","Cose di casa",80.0],[2020,2,"Spesa","Spesa settimanale",88.0],[2020,2,"Varie","Decathlon",57.0],[2020,1,"Entrate","Stipendio Chiara",1500.0],[2020,1,"Entrate","Stipendio Cosimo",2700.0],[2020,1,"TV/internet/Cell","Cellulari abb",20.0],[2020,1,"Elettricità/Gas","Elettricita/Gas",120.0],[2020,1,"TV/internet/Cell","TV + Internet",30.0],[2020,1,"Casa","Mutuo",68.0],[2020,1,"Varie","Dropbox+Amazon Prime",15.83],[2020,1,"Casa","Acqua",20.0],[2020,1,"Palestra ETATO","Palestra Eta/Eto",61.66],[2020,1,"Casa","Spese condominiali",46.67],[2020,1,"Casa","Ass Vita",39.17],[2020,1,"Spesa","Spesa settimanale",120.0],[2020,1,"Varie","Materasso",438.0],[2020,1,"Spesa","Spese varie alimentari+pulizie",200.0],[2020,1,"Spesa","Spesa settimanale",124.0],[2020,1,"Varie","Leroy merlin",83.0],[2020,1,"Varie","Camere aria",6.0],[2020,1,"Varie","Regaleto",40.0],[2020,1,"Svago","Panini durini",11.0],[2020,1,"Entrate","Rimborso Tasse 2019",207.0],[2020,1,"Varie","Guanti e scarpe calcio",70.0],[2020,1,"Spesa","Spesa settimanale",90.0],[2020,1,"Varie","Crema mani",10.0],[2020,1,"Spesa","Spesa settimanale",120.0],[2020,1,"Svago","Extra",67.0],[2020,4,"Entrate","Stipendio Chiara",1259.0],[2020,4,"Entrate","Stipendio Cosimo",2700.0],[2020,4,"TV/internet/Cell","Cellulari abb",20.0],[2020,4,"Elettricità/Gas","Elettricita/Gas",120.0],[2020,4,"TV/internet/Cell","TV + Internet",30.0],[2020,4,"Casa","Mutuo",480.0],[2020,4,"Varie","Dropbox+Amazon Prime",15.83],[2020,4,"Casa","Acqua",20.0],[2020,4,"Palestra ETATO","Palestra Eta/Eto",70.0],[2020,4,"Casa","Spese condominiali",46.67],[2020,4,"Casa","Ass Casa+Ass Vita",65.0],[2020,4,"Casa","Caldaia",40.0],[2020,4,"Spesa","Spesa settimanale",115.0],[2020,4,"Spesa","Ordine Alveare",80.0],[2020,4,"Spesa","Terriccio e concime limone",21.0],[2020,4,"Spesa","Tisane",36.0],[2020,4,"Spesa","Spesa settimanale",120.0],[2020,4,"Spesa","Ordine alveare",70.0],[2020,4,"Spesa","Ordine latte",55.0],[2020,4,"Spesa","Amazon",77.0],[2020,4,"Spesa","Spesa settimanale",110.0],[2020,4,"Varie","Farine+Farro+Amazon",133.0],[2020,4,"Varie","Piante",74.0],[2020,4,"Svago","Yoga",70.0],[2020,4,"Spesa","Ordine Alveare 17/04",77.1],[2020,4,"Spesa","Ordine alveare 16/04",47.0],[2020,4,"Spesa","Ordine alveare 23/04",47.0],[2020,4,"Spesa","Spesa settimanale",115.0],[2020,3,"Entrate","Stipendio Chiara",1249.0],[2020,3,"Entrate","Stipendio Cosimo",2700.0],[2020,3,"TV/internet/Cell","Cellulari abb",20.0],[2020,3,"Elettricità/Gas","Elettricita/Gas",120.0],[2020,3,"TV/internet/Cell","TV + Internet",30.0],[2020,3,"Casa","Mutuo",480.0],[2020,3,"Varie","Dropbox+Amazon Prime",15.83],[2020,3,"Casa","Acqua",20.0],[2020,3,"Palestra ETATO","Palestra Eta/Eto",70.0],[2020,3,"Casa","Spese condominiali",46.67],[2020,3,"Casa","Ass Casa+Ass Vita",65.0],[2020,3,"Casa","Caldaia",40.0],[2020,3,"Spesa","Spesa settimanale",140.0],[2020,3,"Spesa","Spesa aggiuntiva",30.0],[2020,3,"Spesa","Spesa aggiuntiva",30.0],[2020,3,"Spesa","Palestra a casa 1",160.0],[2020,3,"Spesa","Spesa",200.0],[2020,3,"Varie","TpLink",17.0],[2020,3,"Spesa","Spesa settimanale",70.0],[2020,3,"Spesa","Ordine amazon",70.0],[2020,3,"Spesa","Spesa alveare",59.0],[2020,3,"Spesa","Spesa sig. simpatico",30.0],[2020,3,"Spesa","Spesa settimanale",100.0],[2020,3,"Spesa","Farina",39.0],[2020,3,"Spesa","Ordini Alveare",80.0],[2020,3,"Varie","Ordine amazon etix",70.0],[2020,5,"Entrate","Stipendio Chiara",1347.0],[2020,5,"Entrate","Stipendio Cosimo",2700.0],[2020,5,"TV/internet/Cell","Cellulari abb",20.0],[2020,5,"Elettricità/Gas","Elettricita/Gas",120.0],[2020,5,"TV/internet/Cell","TV + Internet",30.0],[2020,5,"Casa","Mutuo",480.0],[2020,5,"Varie","Dropbox+Amazon Prime",15.83],[2020,5,"Casa","Acqua",20.0],[2020,5,"Palestra ETATO","Palestra Eta/Eto",70.0],[2020,5,"Casa","Spese condominiali",46.67],[2020,5,"Casa","Ass Casa+Ass Vita",65.0],[2020,5,"Casa","Caldaia",40.0],[2020,5,"Spesa","Ordine alveare 08/05",45.0],[2020,5,"Varie","CasaBat",32.0],[2020,5,"Svago","Gelato",17.0],[2020,5,"Spesa","Spesa settimanale",150.0],[2020,5,"Spesa","Spesa+alveare",137.0],[2020,5,"Varie","Viridea",100.0],[2020,5,"Spesa","Alveare frutta",21.4],[2020,5,"Spesa","Latte e altro stock",80.0],[2020,5,"Svago","Pizza",15.0],[2020,5,"Varie","Azalea",15.0],[2020,5,"Spesa","spesa",98.0],[2020,5,"Spesa","cortilia",31.0],[2020,5,"Svago","aperitivo",9.0],[2020,5,"Varie","libri",20.0],[2020,5,"Spesa","Spesa settimanale",71.0],[2020,5,"Spesa","Spesa alveare",75.0],[2020,6,"Entrate","Stipendio Chiara",1277.0],[2020,6,"Entrate","Stipendio Cosimo",2700.0],[2020,6,"TV/internet/Cell","Cellulari abb",20.0],[2020,6,"Elettricità/Gas","Elettricita/Gas",120.0],[2020,6,"TV/internet/Cell","TV + Internet",30.0],[2020,6,"Casa","Mutuo",480.0],[2020,6,"Varie","Dropbox+Amazon Prime",15.83],[2020,6,"Casa","Acqua",20.0],[2020,6,"Palestra ETATO","Palestra Eta/Eto",70.0],[2020,6,"Casa","Spese condominiali",46.67],[2020,6,"Casa","Ass Casa+Ass Vita",65.0],[2020,6,"Spesa","Spesa settimanale",92.0],[2020,6,"Spesa","Spesa alveare",75.0],[2020,6,"Varie","tacchi",12.0],[2020,6,"Spesa","Spesa",112.0],[2020,6,"Spesa","Spesa extra",37.0],[2020,6,"Spesa","Spesa",111.0],[2020,6,"Svago","Milano",74.0],[2020,6,"Svago","Gita Oltrepo",110.0],[2020,6,"Varie","Prelievo contante",150.0],[2020,6,"Svago","Immersione",160.0],[2020,6,"Entrate","Assegno TaX UK",1200.0],[2020,6,"Varie","Scrub",20.0],[2020,6,"Varie","Cena circolo",60.0],[2020,6,"Varie","Hamburger",41.0],[2020,6,"Svago","Carta igienica",33.0],[2020,6,"Svago","Ordine amazon",55.0],[2020,6,"Auto","Benzina",55.0],[2020,6,"Spesa","Spesa",110.0],[2020,7,"Entrate","Stipendio Chiara",2008.0],[2020,7,"Entrate","Stipendio Cosimo",2700.0],[2020,7,"TV/internet/Cell","Cellulari abb",20.0],[2020,7,"Elettricità/Gas","Elettricita/Gas",120.0],[2020,7,"TV/internet/Cell","TV + Internet",30.0],[2020,7,"Casa","Mutuo",480.0],[2020,7,"Varie","Dropbox+Amazon Prime",15.83],[2020,7,"Casa","Acqua",20.0],[2020,7,"Palestra ETATO","Palestra Eta/Eto",70.0],[2020,7,"Casa","Spese condominiali",46.67],[2020,7,"Casa","Ass Casa+Ass Vita",65.0],[2020,7,"Spesa","Spesa settimanale",133.0],[2020,7,"Varie","Farmacia FUFFY",150.0],[2020,7,"Varie","Massaggio Cosimo",35.0],[2020,7,"Spesa","Spesa settimanale",66.0],[2020,7,"Svago","Uscita Paolo",60.0],[2020,7,"Svago","Abate",40.0],[2020,7,"Svago","Massaggio Cosimo",69.0],[2020,7,"Varie","Casa Mario",500.0],[2020,7,"Spesa","Frutta",20.0],[2020,7,"Svago","Uscite fiab+circolo",80.0],[2020,7,"Svago","Pantaloncini e altro",65.0],[2020,7,"Svago","Solari",56.0],[2020,7,"Varie","Spesa settimanale",58.0],[2020,7,"Auto","Traghetto",61.0],[2020,7,"Svago","Acquisto sub mulinelli",100.0],[2020,7,"Varie","Ass Sub",160.0],[2020,7,"Spesa","Spesa varia lab",40.0],[2020,7,"Varie","Immersioni",850.0],[2020,7,"Varie","Alberghi e cene",600.0],[2020,7,"Varie","Benzina",150.0],[2020,8,"Entrate","Stipendio Chiara",847.0],[2020,8,"Entrate","Stipendio Cosimo",2700.0],[2020,8,"TV/internet/Cell","Cellulari abb",20.0],[2020,8,"Elettricità/Gas","Elettricita/Gas",120.0],[2020,8,"TV/internet/Cell","TV + Internet",30.0],[2020,8,"Casa","Mutuo",480.0],[2020,8,"Varie","Dropbox+Amazon Prime",15.83],[2020,8,"Casa","Acqua",20.0],[2020,8,"Palestra ETATO","Palestra Eta/Eto",70.0],[2020,8,"Casa","Spese condominiali",46.67],[2020,8,"Casa","Ass Casa+Ass Vita",65.0],[2020,8,"Svago","Spese varie",222.0],[2020,8,"Varie","Brevetto deep",500.0],[2020,8,"Svago","Go Kart",65.0],[2020,8,"Auto","Go Kart",47.0],[2020,8,"Varie","Gelato",17.0],[2020,8,"Varie","Focaccia",12.0],[2020,8,"Svago","Lampada sub etix",141.0],[2020,8,"Varie","cena+pranzo",34.0],[2020,8,"Svago","ceramiche",74.0],[2020,8,"Svago","albergo",160.0],[2020,8,"Spesa","spesa settimanale",126.5],[2020,8,"Auto","benzina",90.0],[2020,8,"Entrate","Rimborso IRPEF",1452.0],[2020,8,"Varie","Oculista",90.0],[2020,8,"Varie","Prelievo",100.0],[2020,8,"Spesa","Spesa varia",22.0],[2020,8,"Spesa","Spesa settimanale",85.0],[2020,8,"Varie","Parrucchiere",35.0],[2020,8,"Varie","Boccapane",105.0],[2020,8,"Varie","Pantaloncini",27.0],[2020,9,"Entrate","Stipendio Chiara",1715.0],[2020,9,"Entrate","Stipendio Cosimo",2700.0],[2020,9,"TV/internet/Cell","Cellulari abb",20.0],[2020,9,"Elettricità/Gas","Elettricita/Gas",120.0],[2020,9,"TV/internet/Cell","TV + Internet",30.0],[2020,9,"Casa","Mutuo",480.0],[2020,9,"Varie","Dropbox+Amazon Prime",15.83],[2020,9,"Casa","Acqua",20.0],[2020,9,"Palestra ETATO","Palestra Eta/Eto",70.0],[2020,9,"Casa","Spese condominiali",46.67],[2020,9,"Casa","Ass Casa+Ass Vita",65.0],[2020,9,"Svago","Hamburger con valerio",55.0],[2020,9,"Spesa","Spesa settimanate",92.0],[2020,9,"Auto","Benzina",50.0],[2020,9,"Varie","Spese varie",20.0],[2020,9,"Spesa","Spesa cosimo Uni",19.0],[2020,9,"Svago","Immersioni e pranzo",88.0],[2020,9,"Auto","Benzina",70.0],[2020,9,"Varie","Gav",350.0],[2020,9,"Svago","Genova",196.0],[2020,9,"Spesa","Spesa settimanale",107.0],[2020,9,"Varie","Attrezzatura bici chiara",87.0],[2020,9,"Varie","Parrucchiere",83.0],[2020,9,"Svago","cena",42.0],[2020,9,"Spesa","spesa settimanale",110.0],[2020,9,"Varie","Vsita medica Cosimo",80.0],[2020,9,"Spesa","Spesa infrasettimanale",16.0],[2020,9,"Varie","Pranzo Digiovine",105.0],[2020,10,"Entrate","Stipendio Chiara",1589.0],[2020,10,"Entrate","Stipendio Cosimo",2700.0],[2020,10,"TV/internet/Cell","Cellulari abb",20.0],[2020,10,"Elettricità/Gas","Elettricita/Gas",120.0],[2020,10,"TV/internet/Cell","TV + Internet",30.0],[2020,10,"Casa","Mutuo",480.0],[2020,10,"Varie","Dropbox+Amazon Prime",15.83],[2020,10,"Casa","Acqua",20.0],[2020,10,"Palestra ETATO","Palestra Eta/Eto",70.0],[2020,10,"Casa","Spese condominiali",46.67],[2020,10,"Casa","Ass Casa+Ass Vita",65.0],[2020,10,"Spesa","Spesa settimanale",106.0],[2020,10,"Auto","benzina",40.0],[2020,10,"Varie","amazon",78.0],[2020,10,"Svago","immersioni",160.0],[2020,10,"Varie","rapallo",30.0],[2020,10,"Spesa","Spesa settimanale",98.0],[2020,10,"Svago","cena cinese",54.0],[2020,10,"Auto","benzina",40.0],[2020,10,"Varie","cena cinese",36.0],[2020,10,"Varie","spese varie",40.0],[2020,10,"Spesa","Spesa settimanale",106.0],[2020,10,"Spesa","alveare",28.0],[2020,10,"Spesa","Spesa settimanale",54.0],[2020,10,"Svago","yoga sequenze",89.0],[2020,10,"Spesa","amazon",58.0],[2020,10,"Spesa","tea",55.0],[2020,10,"Varie","Stampante",130.0],[2020,10,"Spesa","Alveare",40.0],[2020,10,"Svago","boccapane",135.0],[2020,10,"Spesa","Spesa settimanale",83.0],[2020,11,"Entrate","Stipendio Chiara",1600.0],[2020,11,"Entrate","Stipendio Cosimo",2700.0],[2020,11,"TV/internet/Cell","Cellulari abb",20.0],[2020,11,"Elettricità/Gas","Elettricita/Gas",120.0],[2020,11,"TV/internet/Cell","TV + Internet",30.0],[2020,11,"Casa","Mutuo",480.0],[2020,11,"Varie","Dropbox+Amazon Prime",15.83],[2020,11,"Casa","Acqua",20.0],[2020,11,"Palestra ETATO","Palestra Eta/Eto",70.0],[2020,11,"Casa","Spese condominiali",46.67],[2020,11,"Casa","Ass Casa+Ass Vita",65.0],[2020,11,"Varie","Abbonamenti",120.06],[2020,11,"Varie","Farmacia Online",21.0],[2020,11,"Varie","piante",39.0],[2020,11,"Varie","ceretta",57.0],[2020,11,"Svago","Bici Cosimo",751.0],[2020,11,"Spesa","Spesa settimanale",96.0],[2020,11,"Spesa","Alveare 1",22.0],[2020,11,"Varie","Dentista cosimo",374.0],[2020,11,"Spesa","Spesa Amazon",47.0],[2020,11,"Spesa","Spesa per LabCosimo",20.0],[2020,11,"Spesa","Alveare 2",20.0],[2020,11,"Spesa","Spesa settimanale",95.0],[2020,11,"Varie","Asciugatrice",430.0],[2020,11,"Varie","amazon",60.0],[2020,11,"Spesa","spesa",130.0],[2020,11,"Spesa","Spesa settimanale+amazon",90.0],[2020,11,"Varie","amazon",58.0],[2020,12,"Entrate","Stipendio Chiara",1000.0],[2020,12,"Entrate","Stipendio Cosimo",2700.0],[2020,12,"TV/internet/Cell","Cellulari abb",20.0],[2020,12,"Elettricità/Gas","Elettricita/Gas",120.0],[2020,12,"TV/internet/Cell","TV + Internet",30.0],[2020,12,"Casa","Mutuo",480.0],[2020,12,"Varie","Dropbox+Amazon Prime",15.83],[2020,12,"Casa","Acqua",20.0],[2020,12,"Palestra ETATO","Palestra Eta/Eto",70.0],[2020,12,"Casa","Spese condominiali",46.67],[2020,12,"Casa","Ass Casa+Ass Vita",65.0],[2020,12,"Varie","Abbonamenti",120.06],[2020,12,"Varie","Corso pilates",39.0],[2020,12,"Spesa","Cortilia",43.0],[2020,12,"Varie","carta igienica 120 ROTOLI",23.0],[2020,12,"Spesa","spesa settimale",211.0],[2020,12,"Svago","corso mandala",250.0],[2020,12,"Spesa","luna nel pozzo",30.0],[2020,12,"Spesa","Orteat#1",44.0],[2020,12,"Spesa","cortilia",60.0],[2020,12,"Spesa","spesa settimale",90.0],[2020,12,"Varie","libri",63.0],[2020,12,"Svago","pranzo fuori",41.0],[2020,12,"Spesa","spesa settimale",130.0],[2020,12,"Svago","pranzo Lucy",38.0],[2020,12,"Varie","amazon",15.0],[2020,12,"Spesa","cortilia",45.0],[2020,12,"Spesa","spesa settimale",84.0],[2020,12,"Spesa","yogi tea",33.0],[2020,12,"Varie","corsi",95.0],[2020,12,"Varie","pantaloni",50.0],[2020,12,"Varie","corso biomeccanica",160.0],[2020,12,"Spesa","spesa settimale",63.0],[2021,1,"Entrate","Stipendio Chiara",1500.0],[2021,1,"Entrate","Stipendio Cosimo",2700.0],[2021,1,"TV/internet/Cell","Cellulari abb",20.0],[2021,1,"Elettricità/Gas","Elettricita/Gas",150.0],[2021,1,"TV/internet/Cell","TV + Internet",30.0],[2021,1,"Casa","Mutuo",480.0],[2021,1,"Varie","Dropbox+Amazon Prime",15.83],[2021,1,"Casa","Acqua",20.0],[2021,1,"Palestra ETATO","Palestra Eta/Eto",70.0],[2021,1,"Casa","Spese condominiali",46.67],[2021,1,"Casa","Ass Casa+Ass Vita",65.0],[2021,1,"Varie","Abbonamenti",120.06],[2021,1,"Varie","Amazon",50.0],[2021,1,"Spesa","cortilia",50.0],[2021,1,"Svago","biologia marina",60.0],[2021,1,"Spesa","spesa settimanale",110.0],[2021,1,"Varie","biomeccanica",164.0],[2021,1,"Varie","libri e thè",150.0],[2021,1,"Svago","ceretta",70.0],[2021,1,"Spesa","spesa settimanale",43.0],[2021,1,"Varie","amazon",46.0],[2021,1,"Varie","Pulitore catena",10.0],[2021,1,"Spesa","Arance",25.0],[2021,1,"Spesa","Spesa settimanale",75.0],[2021,1,"Spesa","Cortilia 1901",75.0],[2021,1,"Spesa","Tarocco",23.0],[2021,1,"Spesa","Spesa settimanale",103.0],[2021,1,"Varie","sorpresa",30.0],[2021,1,"Spesa","Spesa settimanale",115.0],[2021,1,"Spesa","Cortilia",110.0],[2021,2,"Entrate","Stipendio Chiara",1500.0],[2021,2,"Entrate","Stipendio Cosimo",2700.0],[2021,2,"TV/internet/Cell","Cellulari abb",20.0],[2021,2,"Elettricità/Gas","Elettricita/Gas",150.0],[2021,2,"TV/internet/Cell","TV + Internet",30.0],[2021,2,"Casa","Mutuo",480.0],[2021,2,"Varie","Dropbox+Amazon Prime",15.83],[2021,2,"Casa","Acqua",20.0],[2021,2,"Palestra ETATO","Palestra Eta/Eto",70.0],[2021,2,"Casa","Spese condominiali",46.67],[2021,2,"Casa","Ass Casa+Ass Vita",65.0],[2021,2,"Varie","Abbonamenti",120.06],[2021,2,"Varie","Corso",354.0],[2021,2,"Spesa","Caffè",25.0],[2021,2,"Spesa","spesa settimanale",100.0],[2021,2,"Varie","passaporto",121.5],[2021,2,"Varie","esami del sangue",70.0],[2021,2,"Spesa","spesa settimanale",100.0],[2021,2,"Spesa","Arance",25.0],[2021,2,"Varie","Attrezzi bici e camera d-aria",50.0],[2021,2,"Varie","shampoo",51.0],[2021,2,"Varie","spesa settimanale",120.0],[2021,2,"Svago","pranzo fuori",20.0],[2021,2,"Svago","pizza",15.0],[2021,2,"Svago","gita",77.0],[2021,2,"Spesa","spesa settimanale",107.0],[2021,2,"Spesa","cortilia",90.0],[2021,3,"Entrate","Stipendio Chiara",1500.0],[2021,3,"Entrate","Stipendio Cosimo",2700.0],[2021,3,"TV/internet/Cell","Cellulari abb",20.0],[2021,3,"Elettricità/Gas","Elettricita/Gas",150.0],[2021,3,"TV/internet/Cell","TV + Internet",30.0],[2021,3,"Casa","Mutuo",480.0],[2021,3,"Varie","Dropbox+Amazon Prime",15.83],[2021,3,"Casa","Acqua",20.0],[2021,3,"Palestra ETATO","Palestra Eta/Eto",70.0],[2021,3,"Casa","Spese condominiali",46.67],[2021,3,"Casa","Ass Casa+Ass Vita",65.0],[2021,3,"Varie","Abbonamenti",120.06],[2021,3,"Spesa","amazon",66.0],[2021,3,"Varie","corso",400.0],[2021,3,"Varie","ceretta",93.0],[2021,3,"Svago","libri",47.0],[2021,3,"Spesa","cortilia",80.0],[2021,3,"Spesa","spesa settimanale",61.0],[2021,3,"Spesa","ordine amazon",19.0],[2021,3,"Spesa","cortilia",60.0],[2021,3,"Svago","cena",20.0],[2021,3,"Spesa","spesa settimanale",112.0],[2021,3,"Varie","tisane",50.0],[2021,3,"Varie","Cuffie cosimo + router",50.0],[2021,3,"Spesa","cortilia",70.0],[2021,3,"Varie","amazon",20.0],[2021,3,"Svago","yoga",40.0],[2021,3,"Spesa","spesa yogurt",20.0],[2021,3,"Varie","toner",25.0],[2021,3,"Spesa","cortilia",77.0],[2021,3,"Varie","ginecologo+esami del sangue",200.0],[2021,3,"Varie","medicine",33.0],[2021,3,"Varie","amazon",22.0],[2021,3,"Spesa","cortilia",130.0],[2021,4,"Entrate","Stipendio Chiara",1500.0],[2021,4,"Entrate","Stipendio Cosimo",2700.0],[2021,4,"TV/internet/Cell","Cellulari abb",20.0],[2021,4,"Elettricità/Gas","Elettricita/Gas",150.0],[2021,4,"TV/internet/Cell","TV + Internet",30.0],[2021,4,"Casa","Mutuo",480.0],[2021,4,"Varie","Dropbox+Amazon Prime",15.83],[2021,4,"Casa","Acqua",20.0],[2021,4,"Palestra ETATO","Palestra Eta/Eto",70.0],[2021,4,"Casa","Spese condominiali",46.67],[2021,4,"Casa","Ass Casa+Ass Vita",65.0],[2021,4,"Varie","Abbonamenti",120.06],[2021,4,"Svago","nourish yoga",160.0],[2021,4,"Spesa","spesa",45.0],[2021,4,"Varie","amazon",67.0],[2021,4,"Svago","pizza",18.0],[2021,4,"Spesa","Farine",60.0],[2021,4,"Spesa","spesa",21.0],[2021,4,"Varie","amazon",160.0],[2021,4,"Spesa","spesa settimanale",123.0],[2021,4,"Spesa","cortilia",60.0],[2021,4,"Svago","libri",123.0],[2021,4,"Spesa","tisane",70.0],[2021,4,"Spesa","spesa",133.0],[2021,4,"Spesa","Cortilia 17/04",110.0],[2021,4,"Spesa","spesa settimanale",55.0],[2021,4,"Varie","Caraffa e cuffie cosimo",30.0],[2021,4,"Varie","medicina",22.0],[2021,4,"Svago","corso spalle",21.0],[2021,4,"Spesa","cortilia  24",150.0],[2021,4,"Spesa","spesa",71.0],[2021,4,"Svago","ballo",79.0],[2021,4,"Svago","regaleto",40.0],[2021,4,"Svago","bioginnastica",70.0],[2021,5,"Entrate","Stipendio Chiara",1500.0],[2021,5,"Entrate","Stipendio Cosimo",2700.0],[2021,5,"TV/internet/Cell","Cellulari abb",20.0],[2021,5,"Elettricità/Gas","Elettricita/Gas",150.0],[2021,5,"TV/internet/Cell","TV + Internet",30.0],[2021,5,"Casa","Mutuo",480.0],[2021,5,"Varie","Dropbox+Amazon Prime",15.83],[2021,5,"Casa","Acqua",20.0],[2021,5,"Palestra ETATO","Palestra Eta/Eto",70.0],[2021,5,"Casa","Spese condominiali",46.67],[2021,5,"Casa","Ass Casa+Ass Vita",65.0],[2021,5,"Varie","Abbonamenti",120.06],[2021,5,"Spesa","spese cortilia e coop",150.0],[2021,5,"Svago","aperitivo e pizza",65.0],[2021,5,"Varie","mindfulness",79.0],[2021,5,"Varie","diaframma",43.0],[2021,5,"Spesa","spesa settimanale",133.0],[2021,5,"Varie","scarpe etix",200.0],[2021,5,"Svago","gelato e acqua",10.0],[2021,5,"Varie","carrera",150.0],[2021,5,"Varie","farmacia",32.0],[2021,5,"Svago","ceretta",53.0],[2021,5,"Spesa","macarons e spesa",42.0],[2021,5,"Spesa","spesa settimanale",44.0],[2021,5,"Varie","carreraetix",129.0],[2021,5,"Spesa","Spesa settimana + Cortilia",150.0],[2021,5,"Spesa","Ordine Amazon",120.0],[2021,5,"Auto","Benzina",20.0],[2021,5,"Varie","Fisioterapia Cosimo",150.0],[2021,5,"Spesa","Spesa settimanale",140.0],[2021,5,"Varie","visita",110.0],[2021,5,"Svago","corso 300 h",220.0],[2021,5,"Svago","pizza",20.0],[2021,5,"Spesa","spesa",110.0],[2021,6,"Entrate","Stipendio Chiara",1500.0],[2021,6,"Entrate","Stipendio Cosimo",2700.0],[2021,6,"TV/internet/Cell","Cellulari abb",20.0],[2021,6,"Elettricità/Gas","Elettricita/Gas",150.0],[2021,6,"TV/internet/Cell","TV + Internet",30.0],[2021,6,"Casa","Mutuo",480.0],[2021,6,"Varie","Dropbox+Amazon Prime",15.83],[2021,6,"Casa","Acqua",20.0],[2021,6,"Palestra ETATO","Palestra Eta/Eto",70.0],[2021,6,"Casa","Spese condominiali",46.67],[2021,6,"Casa","Ass Casa+Ass Vita",65.0],[2021,6,"Varie","Abbonamenti",120.06],[2021,6,"Varie","magliette",66.0],[2021,6,"Spesa","Spesa settimanale (Cortilia+Unes)",170.0],[2021,6,"Svago","Milano",100.0],[2021,6,"Varie","shampoo",50.0],[2021,6,"Varie","PEzzi bici",70.0],[2021,6,"Varie","cavalletto bici",40.0],[2021,6,"Varie","Chiavi bici e accessori",40.0],[2021,6,"Spesa","spesa settimanale",143.0],[2021,6,"Svago","tisane",61.0],[2021,6,"Svago","cose per bici",61.0],[2021,6,"Varie","patente",71.0],[2021,6,"Spesa","cortilia",100.0],[2021,6,"Svago","pizza e altro",50.0],[2021,6,"Svago","test",30.0],[2021,6,"Spesa","spesa",110.0],[2021,6,"Svago","libri",60.0],[2021,6,"Svago","cena",33.0],[2021,6,"Varie","Ceretta",90.0],[2021,6,"Svago","cena",90.0],[2021,6,"Varie","cosetto",150.0],[2021,6,"Spesa","Cortilia",80.0],[2021,6,"Svago","apertivo",21.0],[2021,6,"Spesa","carta igienica",33.0],[2021,6,"Spesa","Spesa Coop",65.0],[2021,6,"Varie","Iscrizione ASAPS",39.0],[2021,6,"Varie","esame sangue",75.0],[2021,6,"Varie","scarpe calcio",70.0],[2021,7,"Entrate","Stipendio Chiara",1500.0],[2021,7,"Entrate","Stipendio Cosimo",2700.0],[2021,7,"TV/internet/Cell","Cellulari abb",20.0],[2021,7,"Elettricità/Gas","Elettricita/Gas",150.0],[2021,7,"TV/internet/Cell","TV + Internet",30.0],[2021,7,"Casa","Mutuo",480.0],[2021,7,"Varie","Dropbox+Amazon Prime",15.83],[2021,7,"Casa","Acqua",20.0],[2021,7,"Palestra ETATO","Palestra Eta/Eto",70.0],[2021,7,"Casa","Spese condominiali",46.67],[2021,7,"Casa","Ass Casa+Ass Vita",65.0],[2021,7,"Varie","Abbonamenti",120.06],[2021,7,"Spesa","spesa carrefour",55.0],[2021,7,"Spesa","spesa cortilia",60.0],[2021,7,"Svago","immersioni CSP day",80.0],[2021,7,"Varie","gravidanza in forma",119.0],[2021,7,"Varie","ceretta",46.0],[2021,7,"Spesa","spesa coop",25.0],[2021,7,"Spesa","Spesa settimanale",150.0],[2021,7,"Varie","IKEA",160.0],[2021,7,"Svago","yoga",47.0],[2021,7,"Varie","ginecologo",150.0],[2021,7,"Spesa","Spesa settimanale",120.0],[2021,7,"Varie","parcheggio+benzinaCSPday",30.0],[2021,7,"Svago","cena abate",60.0],[2021,7,"Varie","esame sangue",36.0],[2021,7,"Varie","scrub",25.0],[2021,7,"Svago","ricarica cellulare",55.0],[2021,7,"Spesa","spesa unes chiara",11.0],[2021,7,"Varie","endocrinologo",100.0],[2021,7,"Svago","pizza pd",40.0],[2021,7,"Varie","ceretta",64.0],[2021,7,"Varie","medicine",90.0],[2021,7,"Svago","savona",490.0],[2021,7,"Svago","Vacanza montagnaga",756.0],[2021,7,"Auto","benzina",60.0],[2021,8,"Entrate","Stipendio Chiara",1500.0],[2021,8,"Entrate","Stipendio Cosimo",2700.0],[2021,8,"TV/internet/Cell","Cellulari abb",20.0],[2021,8,"Elettricità/Gas","Elettricita/Gas",150.0],[2021,8,"TV/internet/Cell","TV + Internet",30.0],[2021,8,"Casa","Mutuo",480.0],[2021,8,"Varie","Dropbox+Amazon Prime",15.83],[2021,8,"Casa","Acqua",20.0],[2021,8,"Palestra ETATO","Palestra Eta/Eto",70.0],[2021,8,"Casa","Spese condominiali",46.67],[2021,8,"Casa","Ass Casa+Ass Vita",65.0],[2021,8,"Varie","Abbonamenti",120.06],[2021,8,"Casa","TARI 2021",187.0],[2021,8,"Spesa","Spesa",50.0],[2021,8,"Varie","parrucchiere",63.0],[2021,8,"Varie","pantaloni",50.0],[2021,8,"Varie","solari",22.0],[2021,8,"Svago","viaggio",320.0],[2021,8,"Varie","regali",32.0],[2021,8,"Varie","ceretta e crema",89.0],[2021,8,"Svago","aperitivo",32.0],[2021,8,"Varie","farmacia",22.0],[2021,8,"Svago","cene e varie",362.0],[2021,8,"Varie","ritorno",342.0],[2021,8,"Auto","benzina",120.0],[2021,8,"Spesa","spesa",102.0],[2021,8,"Svago","yoga",169.0],[2021,8,"Spesa","cortilia",62.0],[2021,8,"Varie","libri",32.0],[2021,9,"Entrate","Stipendio Chiara",1500.0],[2021,9,"Entrate","Stipendio Cosimo",2700.0],[2021,9,"TV/internet/Cell","Cellulari abb",20.0],[2021,9,"Elettricità/Gas","Elettricita/Gas",150.0],[2021,9,"TV/internet/Cell","TV + Internet",30.0],[2021,9,"Casa","Mutuo",480.0],[2021,9,"Varie","Dropbox+Amazon Prime",15.83],[2021,9,"Casa","Acqua",20.0],[2021,9,"Palestra ETATO","Palestra Eta/Eto",70.0],[2021,9,"Casa","Spese condominiali",46.67],[2021,9,"Casa","Ass Casa+Ass Vita",65.0],[2021,9,"Varie","Abbonamenti",120.06],[2021,9,"Varie","yoga",130.0],[2021,9,"Spesa","Spesa",150.0],[2021,9,"Spesa","Ordine amazom 0409",60.0],[2021,9,"Svago","Cena circolo SUB",45.0],[2021,9,"Varie","Birilli",40.0],[2021,9,"Svago","pizza",19.0],[2021,9,"Spesa","Spesa Cortilia+COOP",130.0],[2021,9,"Spesa","Mascherine Qualità",104.0],[2021,9,"Spesa","Caffe",50.0],[2021,9,"Varie","medicine",94.0],[2021,9,"Svago","milano paolo",100.0],[2021,9,"Spesa","spesa",140.0],[2021,9,"Spesa","Vino Solidale",240.0],[2021,9,"Varie","Esame del sangue",29.0],[2021,9,"Varie","libri",38.0],[2021,9,"Svago","cena sellino",40.0],[2021,9,"Svago","CSP Day",220.0],[2021,9,"Spesa","Spesa Settimanale",170.0],[2021,9,"Varie","ceretta",64.0],[2021,9,"Svago","cena cinese",20.0],[2021,10,"Entrate","Stipendio Chiara",1500.0],[2021,10,"Entrate","Stipendio Cosimo",2700.0],[2021,10,"TV/internet/Cell","Cellulari abb",20.0],[2021,10,"Elettricità/Gas","Elettricita/Gas",150.0],[2021,10,"TV/internet/Cell","TV + Internet",30.0],[2021,10,"Casa","Mutuo",480.0],[2021,10,"Varie","Dropbox+Amazon Prime",15.83],[2021,10,"Casa","Acqua",20.0],[2021,10,"Palestra ETATO","Palestra Eta/Eto",70.0],[2021,10,"Casa","Spese condominiali",46.67],[2021,10,"Casa","Ass Casa+Ass Vita",65.0],[2021,10,"Varie","Abbonamenti",120.06],[2021,10,"Svago","cenade",100.0],[2021,10,"Varie","Scarpe",250.0],[2021,10,"Spesa","Spesa settimanale",100.0],[2021,10,"Varie","vestiti ete prenatal",154.0],[2021,10,"Svago","pasticcini",22.0],[2021,10,"Svago","Piscina",345.0],[2021,10,"Auto","Patenteto",29.0],[2021,10,"Varie","Marchitelli",150.0],[2021,10,"Spesa","lenti a contatto",15.0],[2021,10,"Svago","Noli",275.0],[2021,10,"Varie","Amazon",40.0],[2021,10,"Varie","Medicine",20.0],[2021,10,"Auto","benzina",100.0],[2021,10,"Varie","esame sangue",52.0],[2021,10,"Varie","scarpe eto suola",42.0],[2021,10,"Svago","Amazon",42.0],[2021,10,"Varie","regaleto",30.0],[2021,10,"Spesa","Spesa settimanale",66.0],[2021,10,"Spesa","cortilia",200.0],[2021,10,"Svago","Amazon",72.0],[2021,10,"Varie","Biglietti aereo papa",310.0],[2021,10,"Entrate","Bonifico papa",600.0],[2021,10,"Svago","ceretta e massaggio",174.0],[2021,10,"Svago","Noli",419.0],[2021,11,"Entrate","Stipendio Chiara",1500.0],[2021,11,"Entrate","Stipendio Cosimo",2700.0],[2021,11,"TV/internet/Cell","Cellulari abb",20.0],[2021,11,"Elettricità/Gas","Elettricita/Gas",150.0],[2021,11,"TV/internet/Cell","TV + Internet",30.0],[2021,11,"Casa","Mutuo",480.0],[2021,11,"TARI","TARI",234.0],[2021,11,"Varie","Dropbox+Amazon Prime",15.83],[2021,11,"Casa","Acqua",20.0],[2021,11,"Palestra ETATO","Palestra Eta/Eto",70.0],[2021,11,"Casa","Spese condominiali",46.67],[2021,11,"Casa","Ass Casa+Ass Vita",65.0],[2021,11,"Varie","Abbonamenti",120.06],[2021,11,"Varie","Ordine amazon eta e eto",100.0],[2021,11,"Varie","medicine",101.0],[2021,11,"Svago","pranzo",16.0],[2021,11,"Spesa","spesa",137.0],[2021,11,"Varie","adelaide",145.0],[2021,11,"Varie","Ordine amazon",55.0],[2021,11,"Spesa","spesa",122.0],[2021,11,"Svago","Costume ade",89.0],[2021,11,"Varie","Ordine amazon",59.0],[2021,11,"Varie","corso yoga",169.0],[2021,11,"Spesa","spesa",160.0],[2021,11,"Varie","esami sangue",36.0],[2021,11,"Svago","yoga",100.0],[2021,11,"Varie","Ricambi Forno",180.0],[2021,11,"Varie","marchitelli",150.0],[2021,11,"Spesa","arance",60.0],[2021,11,"Svago","ceretta e massaggio",200.0],[2021,11,"Spesa","Spesa settimanale",110.0],[2021,11,"Varie","IKEA",240.0],[2021,11,"Svago","cuscino etix",42.0],[2021,12,"Entrate","Stipendio Chiara",1300.0],[2021,12,"Entrate","Stipendio Cosimo",2700.0],[2021,12,"TV/internet/Cell","Cellulari abb",20.0],[2021,12,"Elettricità/Gas","Elettricita/Gas",150.0],[2021,12,"TV/internet/Cell","TV + Internet",30.0],[2021,12,"Casa","Mutuo",480.0],[2021,12,"Varie","Dropbox+Amazon Prime",15.83],[2021,12,"Casa","Acqua",20.0],[2021,12,"Palestra ETATO","Palestra Eta/Eto",70.0],[2021,12,"Casa","Spese condominiali",46.67],[2021,12,"Casa","Ass Casa+Ass Vita",65.0],[2021,12,"Varie","Abbonamenti",120.06],[2021,12,"Varie","ospedalete",170.0],[2021,12,"Varie","Ovetto?Etex",278.0],[2021,12,"Spesa","cortilia",100.0],[2021,12,"Svago","pizza",16.0],[2021,12,"Spesa","medicine",13.0],[2021,12,"Spesa","Arance",44.0],[2021,12,"Varie","Amazon various",20.0],[2021,12,"Varie","borsa",90.0],[2021,12,"Spesa","cortilia",120.0],[2021,12,"Varie","prenatal",96.0],[2021,12,"Svago","Pizza",17.0],[2021,12,"Varie","Fisio Cosimo",102.0],[2021,12,"Varie","tamponi",25.0],[2021,12,"Varie","raccomandata",11.0],[2021,12,"Svago","yoga",120.0],[2021,12,"Spesa","cortilia",160.0],[2021,12,"Svago","Amazon various",40.0],[2021,12,"Svago","Tezenis",62.0],[2021,12,"Varie","Dentista",1200.0],[2021,12,"Svago","cena",35.0],[2021,12,"Varie","Dentrifrici vari cosimo",50.0],[2021,12,"Spesa","spesa cortilia",97.0],[2021,12,"Svago","Pizza",20.0],[2021,12,"Varie","Massaggi chiara",200.0],[2021,12,"Spesa","Spesa cortilia",75.0],[2021,12,"Spesa","Farmacia chiara",49.0],[2022,1,"Entrate","Stipendio Chiara",1300.0],[2022,1,"Entrate","Stipendio Cosimo",2700.0],[2022,1,"TV/internet/Cell","Cellulari abb",20.0],[2022,1,"Elettricità/Gas","Elettricita/Gas",150.0],[2022,1,"TV/internet/Cell","TV + Internet",30.0],[2022,1,"Casa","Mutuo",480.0],[2022,1,"TARI","TARI",21.67],[2022,1,"Varie","Dropbox+Amazon Prime",15.83],[2022,1,"Casa","Acqua",20.0],[2022,1,"Palestra ETATO","Palestra Eta/Eto",70.0],[2022,1,"Casa","Spese condominiali",46.67],[2022,1,"Casa","Ass Casa+Ass Vita",65.0],[2022,1,"Varie","Abbonamenti",120.06],[2022,1,"Spesa","Arance",44.0],[2022,1,"Spesa","Spesa Carrefour",61.0],[2022,1,"Spesa","Fiorentini",31.0],[2022,1,"Svago","Milano",50.0],[2022,1,"Varie","Medicine",15.0],[2022,1,"Varie","felpe",107.0],[2022,1,"Spesa","spesa cortilia",110.0],[2022,1,"Spesa","Detersivo",10.0],[2022,1,"Varie","Batteria Iphone",20.0],[2022,1,"Svago","ikea pranzo",24.0],[2022,1,"Entrate","inps",800.0],[2022,1,"Spesa","assorbenti",19.0],[2022,1,"Svago","Circolo SUB quota annuale",80.0],[2022,1,"Svago","corsi",99.0],[2022,1,"Varie","amazon",120.0],[2022,1,"Spesa","cortilia",110.0],[2022,1,"Svago","cinese",22.0],[2022,1,"Spesa","carrefour",60.0],[2022,1,"ETE/ETU","salviettine etc",55.0],[2022,1,"Spesa","sacchi spazzatura",35.0],[2022,1,"Varie","corsi",71.0],[2022,1,"Varie","Ikea",302.0],[2022,1,"Svago","pranzo",39.0],[2022,1,"ETE/ETU","prenatal",35.0],[2022,1,"Spesa","spesa",150.0],[2022,1,"ETE/ETU","Pannolini Lavabili Primo acquisto",160.0],[2022,1,"ETE/ETU","Altro Amazon",50.0],[2022,1,"Spesa","Farmacia",40.0],[2022,1,"Varie","amazon",40.0],[2022,1,"Varie","salvagente",30.0],[2022,1,"Varie","farmacia",34.0],[2022,1,"Varie","esami sangue",42.0],[2022,1,"Spesa","Arance",44.0],[2022,1,"Spesa","Spesa settimanale",150.0],[2022,1,"Svago","Pranzo",50.0],[2022,1,"ETE/ETU","Giochi sdraietta",61.0],[2022,1,"Varie","medicine",15.0],[2022,1,"ETE/ETU","sacco nanna",22.0],[2022,1,"Varie","Piante",45.0],[2022,2,"Entrate","Stipendio Chiara",1300.0],[2022,2,"Entrate","Stipendio Cosimo",2700.0],[2022,2,"TV/internet/Cell","Cellulari abb",20.0],[2022,2,"Elettricità/Gas","Elettricita/Gas",150.0],[2022,2,"TV/internet/Cell","TV + Internet",30.0],[2022,2,"Casa","Mutuo",480.0],[2022,2,"TARI","TARI",22.0],[2022,2,"Varie","Dropbox+Amazon Prime",15.83],[2022,2,"Casa","Acqua",20.0],[2022,2,"Palestra ETATO","Palestra Eta/Eto",70.0],[2022,2,"Casa","Spese condominiali",46.67],[2022,2,"Casa","Ass Casa+Ass Vita",65.0],[2022,2,"Varie","Abbonamenti",120.06],[2022,2,"ETE/ETU","Dispositivo nanny",129.0],[2022,2,"ETE/ETU","fasciatoio",156.0],[2022,2,"ETE/ETU","petit bateau",84.0],[2022,2,"ETE/ETU","Fasce",144.0],[2022,2,"ETE/ETU","palestrina",145.0],[2022,2,"ETE/ETU","fasciatoio",109.0],[2022,2,"Varie","Cena cosimo",45.0],[2022,2,"Spesa","Spesa Cortilia",100.0],[2022,2,"Spesa","Spesa Carrefour",59.0],[2022,2,"Svago","pizza",19.0],[2022,2,"Spesa","spesa cortilia",150.0],[2022,2,"Spesa","Varie Amazon",50.0],[2022,2,"Varie","medicine",100.0],[2022,2,"Spesa","Spesa",110.0],[2022,2,"ETE/ETU","Pannolini (rate 1x4)",151.0],[2022,2,"Varie","amazon",50.0],[2022,2,"Spesa","carrefour",30.0],[2022,2,"ETE/ETU","vestitini amazon",27.0],[2022,2,"Spesa","cortilia",150.0],[2022,2,"Spesa","cortilia",150.0],[2022,2,"ETE/ETU","giochi",50.0],[2022,2,"Varie","medicine",103.0],[2022,2,"Varie","uppa",60.0],[2022,2,"Varie","medicine ete e dentidrici",88.0],[2022,3,"Entrate","Stipendio Chiara",1300.0],[2022,3,"Entrate","Stipendio Cosimo",2700.0],[2022,3,"TV/internet/Cell","Cellulari abb",20.0],[2022,3,"Elettricità/Gas","Elettricita/Gas",150.0],[2022,3,"TV/internet/Cell","TV + Internet",30.0],[2022,3,"Casa","Mutuo",480.0],[2022,3,"TARI","TARI",22.0],[2022,3,"Varie","Dropbox+Amazon Prime",15.83],[2022,3,"Casa","Acqua",20.0],[2022,3,"Palestra ETATO","Palestra Eta/Eto",70.0],[2022,3,"Casa","Spese condominiali",46.67],[2022,3,"Casa","Ass Casa+Ass Vita",65.0],[2022,3,"Varie","Abbonamenti",120.06],[2022,3,"ETE/ETU","Pannolini (rate 2x4)",151.0],[2022,3,"ETE/ETU","Amazon ete",40.0],[2022,3,"ETE/ETU","navicella",135.0],[2022,3,"Spesa","carrefour",60.0],[2022,3,"Varie","Amazon ete",50.0],[2022,3,"Spesa","spesa cortilia",120.0],[2022,3,"Svago","pizza",16.0],[2022,3,"Auto","benzina",80.0],[2022,3,"Varie","amazon",100.0],[2022,3,"Svago","pizza",18.0],[2022,3,"Entrate","Assegno ETE",200.0],[2022,3,"Casa","Acconto Clima",960.0],[2022,3,"Spesa","spesa cortilia",140.0],[2022,3,"Varie","carta igienica",39.0],[2022,3,"ETE/ETU","Uppa",65.0],[2022,3,"Varie","amazon",40.0],[2022,3,"Svago","fascia",65.0],[2022,3,"Svago","torta",20.0],[2022,3,"Varie","libri",44.0],[2022,3,"Spesa","Spesa cortilia",120.0],[2022,3,"ETE/ETU","vestiti",42.0],[2022,3,"ETE/ETU","medicine",19.0],[2022,3,"Svago","yoga quota",200.0],[2022,3,"Varie","corso mamma",30.0],[2022,3,"Spesa","Spesa cortilia",140.0],[2022,3,"Svago","Pizza",18.0],[2022,3,"ETE/ETU","vestitini",42.0],[2022,3,"Varie","amazon (farina e sacche)",40.0],[2022,3,"Varie","Foodspring",78.0],[2022,3,"ETE/ETU","giostrine",55.0],[2022,3,"Spesa","cortilia bis",100.0],[2022,3,"Varie","medicine",42.0],[2022,3,"Varie","detersivo piatti",10.0],[2022,3,"ETE/ETU","tiralatte",100.0],[2022,4,"Entrate","Stipendio Chiara",1300.0],[2022,4,"Entrate","Stipendio Cosimo",2700.0],[2022,4,"TV/internet/Cell","Cellulari abb",20.0],[2022,4,"Elettricità/Gas","Elettricita/Gas",150.0],[2022,4,"TV/internet/Cell","TV + Internet",30.0],[2022,4,"Casa","Mutuo",480.0],[2022,4,"TARI","TARI",22.0],[2022,4,"Varie","Dropbox+Amazon Prime",15.83],[2022,4,"Casa","Acqua",20.0],[2022,4,"Palestra ETATO","Palestra Eta/Eto",70.0],[2022,4,"Casa","Spese condominiali",46.67],[2022,4,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2022,4,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2022,4,"Varie","Abbonamenti",120.06],[2022,4,"ETE/ETU","Pannolini (rate 3x4)",151.0],[2022,4,"Varie","idropulitrice",53.0],[2022,4,"Svago","ceretta",64.0],[2022,4,"Varie","foto",50.0],[2022,4,"Varie","esami sangue",55.0],[2022,4,"ETE/ETU","prenatal",63.0],[2022,4,"Varie","dentifricio+medicine",40.0],[2022,4,"Varie","endocrinologo",80.0],[2022,4,"Varie","ginecologo",150.0],[2022,4,"Varie","amazon",20.0],[2022,4,"Spesa","cortilia",170.0],[2022,4,"Spesa","cortilia",140.0],[2022,4,"Varie","medicine",23.0],[2022,4,"ETE/ETU","vestitini",100.0],[2022,4,"Svago","pizza",18.0],[2022,4,"Svago","libri",53.0],[2022,4,"Casa","Saldo condizionatori",930.0],[2022,4,"Entrate","Assegno ETE",200.0],[2022,4,"Varie","amazon",50.0],[2022,4,"Spesa","cortilia",140.0],[2022,4,"ETE/ETU","ecobaby",106.0],[2022,4,"Svago","postnatal",51.0],[2022,4,"Svago","parco",32.0],[2022,4,"ETE/ETU","ciclamino",25.0],[2022,4,"Svago","ciclamino",18.0],[2022,4,"Spesa","Spesa settimanale",145.0],[2022,4,"Svago","pianta",35.0],[2022,4,"Varie","amazon",85.0],[2022,4,"Spesa","Spesa settimanale",140.0],[2022,5,"Entrate","Stipendio Chiara",1300.0],[2022,5,"Entrate","Stipendio Cosimo",2700.0],[2022,5,"TV/internet/Cell","Cellulari abb",20.0],[2022,5,"Elettricità/Gas","Elettricita/Gas",150.0],[2022,5,"TV/internet/Cell","TV + Internet",30.0],[2022,5,"Casa","Mutuo",480.0],[2022,5,"TARI","TARI",22.0],[2022,5,"Varie","Dropbox+Amazon Prime",15.83],[2022,5,"Casa","Acqua",20.0],[2022,5,"Palestra ETATO","Palestra Eta/Eto",70.0],[2022,5,"Casa","Spese condominiali",46.67],[2022,5,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2022,5,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2022,5,"Varie","Abbonamenti",120.06],[2022,5,"ETE/ETU","Pannolini (rate 4x4)",151.0],[2022,5,"ETE/ETU","bavaglina etc",70.0],[2022,5,"ETE/ETU","lovevery",84.0],[2022,5,"Svago","yoga",251.0],[2022,5,"Spesa","spesa",160.0],[2022,5,"Svago","ivan",30.0],[2022,5,"ETE/ETU","zipster",60.0],[2022,5,"Varie","amazon",150.0],[2022,5,"Varie","macchina fotografica",670.0],[2022,5,"Svago","settimanale",20.0],[2022,5,"Auto","benzina",25.0],[2022,5,"Svago","pizza",18.0],[2022,5,"Svago","uscita",26.0],[2022,5,"Spesa","spesa",160.0],[2022,5,"Spesa","Varie unes cosimo",40.0],[2022,5,"Entrate","Assegno ete",200.0],[2022,5,"Svago","fascia ring",30.0],[2022,5,"Spesa","spesa settimanale",200.0],[2022,5,"Varie","stvali",29.0],[2022,5,"Varie","vestito",60.0],[2022,5,"Svago","Ceretta",64.0],[2022,5,"ETE/ETU","Nest",60.0],[2022,5,"ETE/ETU","città del sole",50.0],[2022,5,"Varie","pizza+pranzo delia",32.0],[2022,5,"Spesa","spesa settimanale",180.0],[2022,5,"Svago","monza",50.0],[2022,5,"Auto","benzina",60.0],[2022,5,"Varie","vestito",63.0],[2022,6,"Entrate","Stipendio Chiara",700.0],[2022,6,"Entrate","Stipendio Cosimo",3600.0],[2022,6,"TV/internet/Cell","Cellulari abb",20.0],[2022,6,"Elettricità/Gas","Elettricita/Gas",150.0],[2022,6,"TV/internet/Cell","TV + Internet",30.0],[2022,6,"Casa","Mutuo",480.0],[2022,6,"TARI","TARI",22.0],[2022,6,"Varie","Dropbox+Amazon Prime",15.83],[2022,6,"Casa","Acqua",20.0],[2022,6,"Palestra ETATO","Palestra Eta/Eto",70.0],[2022,6,"Casa","Spese condominiali",46.67],[2022,6,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2022,6,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2022,6,"Varie","Abbonamenti",120.06],[2022,6,"Varie","vestito",63.0],[2022,6,"ETE/ETU","Ecobaby",100.0],[2022,6,"Entrate","Assegno ete",200.0],[2022,6,"ETE/ETU","vestitini+giochi ete",150.0],[2022,6,"ETE/ETU","kinedu",42.0],[2022,6,"Svago","tisane",20.0],[2022,6,"Spesa","spesa settimanale",140.0],[2022,6,"Svago","gita",70.0],[2022,6,"Svago","Pizza",20.0],[2022,6,"Varie","regalo matrimonio",500.0],[2022,6,"Varie","Dentista",1700.0],[2022,6,"Svago","perugia",608.0],[2022,6,"Svago","lago",300.0],[2022,6,"Auto","benzina",300.0],[2022,6,"Varie","amazon",47.0],[2022,6,"Varie","mustela",60.0],[2022,6,"Varie","farmacia",25.0],[2022,6,"Svago","termoli",90.0],[2022,6,"ETE/ETU","vestitini",32.0],[2022,6,"Svago","ritorno",220.0],[2022,6,"Svago","matera",150.0],[2022,6,"ETE/ETU","regalete",42.0],[2022,6,"Spesa","spesa settimanale",160.0],[2022,7,"Entrate","Stipendio Chiara",700.0],[2022,7,"Entrate","Stipendio Cosimo",3370.0],[2022,7,"TV/internet/Cell","Cellulari abb",20.0],[2022,7,"Elettricità/Gas","Elettricita/Gas",150.0],[2022,7,"TV/internet/Cell","TV + Internet",30.0],[2022,7,"Casa","Mutuo",480.0],[2022,7,"TARI","TARI",22.0],[2022,7,"Varie","Dropbox+Amazon Prime",15.83],[2022,7,"Casa","Acqua",20.0],[2022,7,"Palestra ETATO","Palestra Eta/Eto",70.0],[2022,7,"Casa","Spese condominiali",46.67],[2022,7,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2022,7,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2022,7,"Varie","Abbonamenti",120.06],[2022,7,"Varie","vestito",63.0],[2022,7,"Entrate","ete",200.0],[2022,7,"ETE/ETU","lovevery",84.0],[2022,7,"Spesa","spesa",160.0],[2022,7,"Auto","Bollo",141.0],[2022,7,"Auto","Gasolio",70.0],[2022,7,"ETE/ETU","ecobaby",60.0],[2022,7,"Varie","benetton",100.0],[2022,7,"Varie","amazon",150.0],[2022,7,"Svago","feltrinelli",30.0],[2022,7,"Trasporti","pullman",30.0],[2022,7,"Svago","pizza",20.0],[2022,7,"Spesa","spesa",200.0],[2022,7,"Varie","tamponi",20.0],[2022,7,"Svago","idroscalo",50.0],[2022,7,"Svago","baselga",1400.0],[2022,7,"Svago","aperitivo",34.0],[2022,7,"Spesa","frutta",20.0],[2022,7,"Spesa","spesa settimanale",220.0],[2022,7,"Spesa","farmacia",70.0],[2022,7,"ETE/ETU","body",32.0],[2022,7,"Varie","amazon",128.0],[2022,7,"Varie","ceretta",64.0],[2022,7,"ETE/ETU","passaporto",115.0],[2022,7,"Svago","pizza+altro",50.0],[2022,7,"Svago","Baselga extra",322.0],[2022,7,"Auto","Benzina",60.0],[2022,7,"ETE/ETU","zipster",135.0],[2022,8,"Entrate","Stipendio Chiara",1300.0],[2022,8,"Entrate","Stipendio Cosimo",3370.0],[2022,8,"TV/internet/Cell","Cellulari abb",20.0],[2022,8,"Elettricità/Gas","Elettricita/Gas",150.0],[2022,8,"TV/internet/Cell","TV + Internet",30.0],[2022,8,"Casa","Mutuo",480.0],[2022,8,"TARI","TARI",22.0],[2022,8,"Varie","Dropbox+Amazon Prime",15.83],[2022,8,"Casa","Acqua",20.0],[2022,8,"Palestra ETATO","Palestra Eta/Eto",70.0],[2022,8,"Casa","Spese condominiali",46.67],[2022,8,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2022,8,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2022,8,"Varie","Abbonamenti",120.06],[2022,8,"Entrate","ete",200.0],[2022,8,"ETE/ETU","Iscrizione TARTALLEGRE",83.0],[2022,8,"Spesa","spesa",98.0],[2022,8,"Svago","pranzo loft",40.0],[2022,8,"Varie","amazon",100.0],[2022,8,"Svago","piscina",50.0],[2022,8,"Spesa","spesa settimanale",140.0],[2022,8,"Svago","milano",102.0],[2022,8,"ETE/ETU","petit bateau",20.0],[2022,8,"Trasporti","treno",263.0],[2022,8,"Svago","Milano",55.0],[2022,8,"ETE/ETU","Dudu",30.0],[2022,8,"Varie","Scarpe",79.0],[2022,8,"Varie","Zipster",65.0],[2022,8,"Trasporti","treno",250.0],[2022,8,"ETE/ETU","benetton ete",32.0],[2022,8,"Varie","vestiti eta",90.0],[2022,8,"Varie","varie treno",50.0],[2022,8,"Svago","pranzo fuori",130.0],[2022,8,"Auto","benzina",70.0],[2022,8,"Varie","varie grottaglie",100.0],[2022,8,"Spesa","Spesa",150.0],[2022,8,"Svago","Pizza",24.0],[2022,8,"Svago","pranzo",75.0],[2022,8,"Varie","brico",100.0],[2022,8,"Svago","pranzo",25.0],[2022,8,"Varie","pantaloncini",40.0],[2022,8,"Varie","amazon",68.0],[2022,8,"Svago","milano Tom",130.0],[2022,8,"ETE/ETU","ecobaby",114.0],[2022,8,"Spesa","spesa",150.0],[2022,8,"Svago","fiori",30.0],[2022,9,"Entrate","Stipendio Chiara",2000.0],[2022,9,"Entrate","Stipendio Cosimo",3370.0],[2022,9,"TV/internet/Cell","Cellulari abb",20.0],[2022,9,"Elettricità/Gas","Elettricita/Gas",150.0],[2022,9,"TV/internet/Cell","TV + Internet",30.0],[2022,9,"Casa","Mutuo",480.0],[2022,9,"TARI","TARI",22.0],[2022,9,"Varie","Dropbox+Amazon Prime",15.83],[2022,9,"Casa","Acqua",20.0],[2022,9,"Palestra ETATO","Palestra Eta/Eto",70.0],[2022,9,"Casa","Spese condominiali",46.67],[2022,9,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2022,9,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2022,9,"Varie","Abbonamenti",120.06],[2022,9,"Entrate","ete",200.0],[2022,9,"ETE/ETU","lovevery",150.0],[2022,9,"ETE/ETU","cancelli",161.0],[2022,9,"Svago","pizza",25.0],[2022,9,"Spesa","spesa",170.0],[2022,9,"Trasporti","pullman",70.0],[2022,9,"Spesa","spesa settimanale",170.0],[2022,9,"Varie","focaccia etc",40.0],[2022,9,"Varie","amazon",120.0],[2022,9,"ETE/ETU","ecobaby",140.0],[2022,9,"ETE/ETU","sacconanna+cover",58.0],[2022,9,"Varie","sacconanna+cover",130.0],[2022,9,"ETE/ETU","benetton",31.0],[2022,9,"ETE/ETU","chicco",17.0],[2022,9,"Varie","prenatal",100.0],[2022,9,"Svago","girete",50.0],[2022,9,"Varie","letto",1300.0],[2022,9,"Spesa","spesa",170.0],[2022,9,"Svago","slumbersac",160.0],[2022,9,"Svago","uscita daniela",12.0],[2022,9,"ETE/ETU","crema adelaidina",20.0],[2022,9,"Varie","amazon",75.0],[2022,9,"ETE/ETU","tata",384.0],[2022,10,"Entrate","Stipendio Chiara",2000.0],[2022,10,"Entrate","Stipendio Cosimo",3370.0],[2022,10,"TV/internet/Cell","Cellulari abb",20.0],[2022,10,"Elettricità/Gas","Elettricita/Gas",150.0],[2022,10,"TV/internet/Cell","TV + Internet",30.0],[2022,10,"Casa","Mutuo",480.0],[2022,10,"TARI","TARI",22.0],[2022,10,"Varie","Dropbox+Amazon Prime",15.83],[2022,10,"Casa","Acqua",20.0],[2022,10,"Palestra ETATO","Palestra Eta/Eto",66.67],[2022,10,"Casa","Spese condominiali",46.67],[2022,10,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2022,10,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2022,10,"Varie","Abbonamenti",120.06],[2022,10,"Entrate","ete",200.0],[2022,10,"Trasporti","bus",36.0],[2022,10,"Svago","keith",100.0],[2022,10,"Varie","Ricambi brompton",60.0],[2022,10,"Svago","pizza",20.0],[2022,10,"Auto","Benzina",70.0],[2022,10,"ETE/ETU","vestitini",100.0],[2022,10,"Svago","pranzo fuori",38.0],[2022,10,"Spesa","spesa settimanale",200.0],[2022,10,"Varie","regaleto",144.0],[2022,10,"ETE/ETU","zipster",70.0],[2022,10,"Varie","amazon",100.0],[2022,10,"Svago","feltrinelli",23.0],[2022,10,"ETE/ETU","pantaloni belli",120.0],[2022,10,"Spesa","spesa settimanale",200.0],[2022,10,"Svago","spremuta",20.0],[2022,10,"Svago","uscita tutti e tre",9.0],[2022,10,"Varie","regaleto cannavacciulo",48.0],[2022,10,"ETE/ETU","strumenti musicali",32.0],[2022,10,"Varie","carrera",77.0],[2022,10,"Spesa","spesa settimanale",200.0],[2022,10,"Svago","extra",150.0],[2022,10,"Varie","Purificatore Adelaide",120.0],[2022,10,"Varie","carta igienica",74.0],[2022,10,"Spesa","spesa settimanale",200.0],[2022,10,"ETE/ETU","ecobaby",110.0],[2022,10,"Auto","benzina",70.0],[2022,10,"ETE/ETU","tata",384.0],[2022,11,"Entrate","Stipendio Chiara",2000.0],[2022,11,"Entrate","Stipendio Cosimo",3370.0],[2022,11,"TV/internet/Cell","Cellulari abb",20.0],[2022,11,"Elettricità/Gas","Elettricita/Gas",150.0],[2022,11,"TV/internet/Cell","TV + Internet",30.0],[2022,11,"Casa","Mutuo",480.0],[2022,11,"TARI","TARI",22.0],[2022,11,"Varie","Dropbox+Amazon Prime",15.83],[2022,11,"Casa","Acqua",20.0],[2022,11,"Palestra ETATO","Palestra Eta/Eto",66.67],[2022,11,"Casa","Spese condominiali",46.67],[2022,11,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2022,11,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2022,11,"Varie","Abbonamenti",120.06],[2022,11,"Entrate","ete",200.0],[2022,11,"Trasporti","bus",36.0],[2022,11,"Spesa","spesa settimanale",622.0],[2022,11,"ETE/ETU","lovery",84.0],[2022,11,"ETE/ETU","vestitini",145.0],[2022,11,"Varie","pantaloni eto",160.0],[2022,11,"Varie","ceretta",68.0],[2022,11,"Varie","borsa chiara",130.0],[2022,11,"Varie","amazon",200.0],[2022,11,"ETE/ETU","pannolini",130.0],[2022,11,"Svago","tea",35.0],[2022,11,"Varie","medicine",18.0],[2022,11,"Svago","brunch",50.0],[2022,11,"Varie","cassetta posta",27.0],[2022,11,"Svago","uscita sabato",50.0],[2022,11,"Svago","tea",24.0],[2022,11,"ETE/ETU","petit bateau",119.0],[2022,11,"Varie","magliette+altro",130.0],[2022,11,"ETE/ETU","frugi",160.0],[2022,11,"Svago","brunch più sabato",60.0],[2022,11,"Varie","canottiere notte",90.0],[2022,11,"ETE/ETU","Tata Anna",370.0],[2022,11,"Varie","babywearing",670.0],[2022,11,"ETE/ETU","tartallegre",273.0],[2022,12,"Entrate","Stipendio Chiara",2000.0],[2022,12,"Entrate","Stipendio Cosimo",3370.0],[2022,12,"TV/internet/Cell","Cellulari abb",20.0],[2022,12,"Elettricità/Gas","Elettricita/Gas",150.0],[2022,12,"TV/internet/Cell","TV + Internet",30.0],[2022,12,"Casa","Mutuo",480.0],[2022,12,"TARI","TARI",22.0],[2022,12,"Varie","Dropbox+Amazon Prime",15.83],[2022,12,"Casa","Acqua",20.0],[2022,12,"Palestra ETATO","Palestra Eta/Eto",66.67],[2022,12,"Casa","Spese condominiali",46.67],[2022,12,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2022,12,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2022,12,"Varie","Abbonamenti",120.06],[2022,12,"Entrate","ete",200.0],[2022,12,"Trasporti","bus",36.0],[2022,12,"Spesa","spesa settimanale",800.0],[2022,12,"ETE/ETU","zipster",139.0],[2022,12,"Varie","giacca eto",169.0],[2022,12,"ETE/ETU","sacco nanna",60.0],[2022,12,"Varie","amazon",200.0],[2022,12,"Svago","gita+horti",65.0],[2022,12,"Svago","grazzano",54.0],[2022,12,"Auto","benzina",122.0],[2022,12,"ETE/ETU","blocchi",127.0],[2022,12,"ETE/ETU","Seggiolino nuovo",189.0],[2022,12,"ETE/ETU","Foto",30.0],[2022,12,"Varie","regaleto papone",80.0],[2022,12,"Svago","Biglietti aerei LONDON",380.0],[2022,12,"Svago","biglietti aerei puglia",490.0],[2022,12,"Svago","brunch",75.0],[2022,12,"Varie","ikea",200.0],[2022,12,"Svago","pranzo fuori",70.0],[2022,12,"Varie","cellulare eto",160.0],[2022,12,"Svago","pranzo fuori",56.0],[2022,12,"Varie","Dentista",120.0],[2022,12,"ETE/ETU","Tartallegre",360.0],[2023,1,"Entrate","Stipendio Chiara",2000.0],[2023,1,"Entrate","Stipendio Cosimo",3370.0],[2023,1,"TV/internet/Cell","Cellulari abb",20.0],[2023,1,"Elettricità/Gas","Elettricita/Gas",150.0],[2023,1,"TV/internet/Cell","TV + Internet",30.0],[2023,1,"Casa","Mutuo",480.0],[2023,1,"TARI","TARI",22.0],[2023,1,"Varie","Dropbox+Amazon Prime",15.83],[2023,1,"Casa","Acqua",20.0],[2023,1,"Palestra ETATO","Palestra Eta/Eto",66.67],[2023,1,"Casa","Spese condominiali",46.67],[2023,1,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2023,1,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2023,1,"Varie","Abbonamenti",120.06],[2023,1,"Entrate","ete",200.0],[2023,1,"Trasporti","bus",36.0],[2023,1,"Spesa","spesa settimanale",800.0],[2023,1,"ETE/ETU","lovery",84.0],[2023,1,"Varie","amazon",250.0],[2023,1,"Varie","Ikea",150.0],[2023,1,"Varie","PD",50.0],[2023,1,"Varie","SUB",100.0],[2023,1,"Auto","benzina",150.0],[2023,1,"Varie","shopping",90.0],[2023,1,"Svago","ceretta",68.0],[2023,1,"Svago","gita",733.0],[2023,1,"Svago","regaelete compleanno",314.0],[2023,1,"Svago","pranzo fuori",40.0],[2023,1,"Varie","varie",50.0],[2023,1,"ETE/ETU","asilo",427.5],[2023,1,"Svago","pranzo fuori",30.0],[2023,1,"Auto","macchina uk",300.0],[2023,2,"Entrate","Stipendio Chiara",2000.0],[2023,2,"Entrate","Stipendio Cosimo",3370.0],[2023,2,"TV/internet/Cell","Cellulari abb",20.0],[2023,2,"Elettricità/Gas","Elettricita/Gas",150.0],[2023,2,"TV/internet/Cell","TV + Internet",30.0],[2023,2,"Casa","Mutuo",480.0],[2023,2,"TARI","TARI",22.0],[2023,2,"Varie","Dropbox+Amazon Prime",15.83],[2023,2,"Casa","Acqua",20.0],[2023,2,"Palestra ETATO","Palestra Eta/Eto",66.67],[2023,2,"Casa","Spese condominiali",46.67],[2023,2,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2023,2,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2023,2,"Varie","Abbonamenti",120.06],[2023,2,"Entrate","ete",204.0],[2023,2,"Trasporti","bus",36.0],[2023,2,"Spesa","spesa settimanale",800.0],[2023,2,"ETE/ETU","ecobaby",105.0],[2023,2,"Svago","horti",100.0],[2023,2,"ETE/ETU","Asilo",368.0],[2023,2,"ETE/ETU","Tata Anna",240.0],[2023,2,"Varie","amazon",200.0],[2023,2,"ETE/ETU","petit bateau",216.0],[2023,2,"Svago","uk",2000.0],[2023,2,"Entrate","Rimborso Prestito CLEANSCHOOL (1 rata)",1000.0],[2023,2,"Varie","pranzi fuori",100.0],[2023,2,"Auto","benzina",60.0],[2023,2,"Varie","horti",27.0],[2023,3,"Entrate","Stipendio Chiara",2000.0],[2023,3,"Entrate","Stipendio Cosimo",3370.0],[2023,3,"TV/internet/Cell","Cellulari abb",20.0],[2023,3,"Elettricità/Gas","Elettricita/Gas",150.0],[2023,3,"TV/internet/Cell","TV + Internet",30.0],[2023,3,"Casa","Mutuo",480.0],[2023,3,"TARI","TARI",22.0],[2023,3,"Varie","Dropbox+Amazon Prime",15.83],[2023,3,"Casa","Acqua",20.0],[2023,3,"Palestra ETATO","Palestra Eta/Eto",66.67],[2023,3,"Casa","Spese condominiali",46.67],[2023,3,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2023,3,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2023,3,"Varie","Abbonamenti",120.06],[2023,3,"Entrate","ete",204.0],[2023,3,"Spesa","spesa settimanale",800.0],[2023,3,"ETE/ETU","Tartallegre",450.0],[2023,3,"ETE/ETU","lovevery",127.0],[2023,3,"ETE/ETU","bamboom",119.0],[2023,3,"ETE/ETU","ecobaby",205.0],[2023,3,"Entrate","Ete INPS NIDO (Sett-Ott)",410.0],[2023,3,"Varie","stampe",25.0],[2023,3,"Varie","regali",53.0],[2023,3,"Svago","parrucchiere",43.0],[2023,3,"ETE/ETU","compleanno",140.0],[2023,3,"Svago","Ceretta",68.0],[2023,3,"Varie","Corso salvavita",120.0],[2023,3,"Varie","Foto",35.0],[2023,3,"Svago","compleanno eta (pranzo+horti)",75.0],[2023,3,"Svago","Horti",100.0],[2023,3,"Varie","Amazon",250.0],[2023,3,"Svago","pranzo domenica fuori",70.0],[2023,3,"Auto","benzina",70.0],[2023,3,"Varie","Varie Amazon",100.0],[2023,3,"Svago","pizza",15.0],[2023,3,"Svago","Cinese+horti",50.0],[2023,3,"Varie","Ikea",60.0],[2023,3,"ETE/ETU","Tata Anna",200.0],[2023,3,"Auto","olio etc",250.0],[2023,3,"ETE/ETU","horti+loft",35.0],[2023,3,"Svago","horti+loft",20.0],[2023,3,"Spesa","mozzarelle",25.0],[2023,4,"Entrate","Stipendio Chiara",2000.0],[2023,4,"Entrate","Stipendio Cosimo",3370.0],[2023,4,"TV/internet/Cell","Cellulari abb",20.0],[2023,4,"Elettricità/Gas","Elettricita/Gas",150.0],[2023,4,"TV/internet/Cell","TV + Internet",30.0],[2023,4,"Casa","Mutuo",480.0],[2023,4,"TARI","TARI",22.0],[2023,4,"Varie","Dropbox+Amazon Prime",15.83],[2023,4,"Casa","Acqua",20.0],[2023,4,"Palestra ETATO","Palestra Eta/Eto",66.67],[2023,4,"Casa","Spese condominiali",46.67],[2023,4,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2023,4,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2023,4,"Varie","Abbonamenti",120.06],[2023,4,"Entrate","ete",204.0],[2023,4,"Spesa","spesa settimanale",800.0],[2023,4,"Svago","cinese+horti",52.0],[2023,4,"Varie","amazon",200.0],[2023,4,"ETE/ETU","Rimbambita pelle",84.0],[2023,4,"ETE/ETU","fiocchi di riso",90.0],[2023,4,"ETE/ETU","petit bateau",175.0],[2023,4,"ETE/ETU","tartallegre",414.0],[2023,4,"Svago","iseo",800.0],[2023,4,"Svago","cinese+horti",109.0],[2023,4,"Varie","Seggiolino bici",120.0],[2023,4,"Varie","gelato",22.0],[2023,4,"Svago","horti",50.0],[2023,4,"Spesa","coop",40.0],[2023,4,"Svago","25 aprile",55.0],[2023,4,"Varie","certta",68.0],[2023,4,"Svago","yoga",120.0],[2023,4,"Svago","pranzo fuori",60.0],[2023,4,"Auto","benzina",65.0],[2023,5,"Entrate","Stipendio Chiara",2000.0],[2023,5,"Entrate","Stipendio Cosimo",3370.0],[2023,5,"TV/internet/Cell","Cellulari abb",20.0],[2023,5,"Elettricità/Gas","Elettricita/Gas",150.0],[2023,5,"TV/internet/Cell","TV + Internet",30.0],[2023,5,"Casa","Mutuo",480.0],[2023,5,"TARI","TARI",22.0],[2023,5,"Varie","Dropbox+Amazon Prime",15.83],[2023,5,"Casa","Acqua",20.0],[2023,5,"Palestra ETATO","Palestra Eta/Eto",66.67],[2023,5,"Casa","Spese condominiali",46.67],[2023,5,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2023,5,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2023,5,"Varie","Abbonamenti",120.06],[2023,5,"Entrate","ete",204.0],[2023,5,"Spesa","spesa settimanale",800.0],[2023,5,"ETE/ETU","zipster",112.0],[2023,5,"ETE/ETU","tartallegre",627.0],[2023,5,"Svago","horti",60.0],[2023,5,"Svago","cinese+altro sabato",150.0],[2023,5,"ETE/ETU","shopping adelaidina",185.0],[2023,5,"ETE/ETU","scarpine",55.0],[2023,5,"Spesa","Tea",45.0],[2023,5,"Svago","Cinese",30.0],[2023,5,"Varie","Amazon",200.0],[2023,5,"Varie","ecobaby",100.0],[2023,5,"Svago","cinese",30.0],[2023,5,"Varie","anticipo bici",240.0],[2023,5,"ETE/ETU","petite bateau",93.0],[2023,5,"Svago","horti+domenica",50.0],[2023,5,"Svago","cinese",30.0],[2023,5,"Svago","pranzo fuori",75.0],[2023,5,"Varie","yoga",110.0],[2023,5,"Svago","pizza",20.0],[2023,5,"Varie","Spese condominiali",700.0],[2023,6,"Entrate","Stipendio Chiara",2000.0],[2023,6,"Entrate","Stipendio Cosimo",3370.0],[2023,6,"TV/internet/Cell","Cellulari abb",20.0],[2023,6,"Elettricità/Gas","Elettricita/Gas",150.0],[2023,6,"TV/internet/Cell","TV + Internet",30.0],[2023,6,"Casa","Mutuo",480.0],[2023,6,"TARI","TARI",22.0],[2023,6,"Varie","Dropbox+Amazon Prime",15.83],[2023,6,"Casa","Acqua",20.0],[2023,6,"Palestra ETATO","Palestra Eta/Eto",66.67],[2023,6,"Casa","Spese condominiali",46.67],[2023,6,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2023,6,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2023,6,"Varie","Abbonamenti",120.06],[2023,6,"Entrate","ete",204.0],[2023,6,"Spesa","spesa settimanale",800.0],[2023,6,"Varie","lucchetto bici",160.0],[2023,6,"ETE/ETU","tartallegre",612.5],[2023,6,"Svago","horti+altro",100.0],[2023,6,"ETE/ETU","lovevery",126.0],[2023,6,"Svago","Aereo monaco",250.0],[2023,6,"Svago","CArgobike accessori",170.0],[2023,6,"Varie","amazon",300.0],[2023,6,"Svago","pranzo fuori",60.0],[2023,6,"Spesa","unes",60.0],[2023,6,"ETE/ETU","balanced bike",250.0],[2023,6,"Svago","pranzo greco",32.0],[2023,6,"Varie","Assicurazione Viaggio Annuale",260.0],[2023,6,"Varie","Dentista cosimo",130.0],[2023,6,"Varie","scarpe",30.0],[2023,6,"Varie","ceretta",68.0],[2023,6,"Varie","magliette",110.0],[2023,6,"Svago","horti",100.0],[2023,6,"Auto","benzina",40.0],[2023,6,"Varie","monaco",1220.0],[2023,6,"Entrate","Bonus nido Dicembre 2022",271.0],[2023,7,"Entrate","Stipendio Chiara",2000.0],[2023,7,"Entrate","Stipendio Cosimo",3370.0],[2023,7,"TV/internet/Cell","Cellulari abb",20.0],[2023,7,"Elettricità/Gas","Elettricita/Gas",150.0],[2023,7,"TV/internet/Cell","TV + Internet",30.0],[2023,7,"Casa","Mutuo",480.0],[2023,7,"TARI","TARI",22.0],[2023,7,"Varie","Dropbox+Amazon Prime",15.83],[2023,7,"Casa","Acqua",20.0],[2023,7,"Palestra ETATO","Palestra Eta/Eto",66.67],[2023,7,"Casa","Spese condominiali",46.67],[2023,7,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2023,7,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2023,7,"Varie","Abbonamenti",120.06],[2023,7,"Entrate","ete",204.0],[2023,7,"Spesa","spesa settimanale",800.0],[2023,7,"ETE/ETU","tartallegre",840.0],[2023,7,"Svago","campus",73.0],[2023,7,"Spesa","amazon",300.0],[2023,7,"Varie","regalini",21.0],[2023,7,"Varie","ceretta",160.0],[2023,7,"Varie","decathlon",55.0],[2023,7,"Svago","Puglia",2000.0],[2023,7,"Varie","yoga",200.0],[2023,8,"Entrate","Stipendio Chiara",2000.0],[2023,8,"Entrate","Stipendio Cosimo",3370.0],[2023,8,"TV/internet/Cell","Cellulari abb",20.0],[2023,8,"Elettricità/Gas","Elettricita/Gas",150.0],[2023,8,"TV/internet/Cell","TV + Internet",30.0],[2023,8,"Casa","Mutuo",480.0],[2023,8,"TARI","TARI",22.0],[2023,8,"Varie","Dropbox+Amazon Prime",15.83],[2023,8,"Casa","Acqua",20.0],[2023,8,"Palestra ETATO","Palestra Eta/Eto",66.67],[2023,8,"Casa","Spese condominiali",46.67],[2023,8,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2023,8,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2023,8,"Varie","Abbonamenti",120.06],[2023,8,"Entrate","ete",100.0],[2023,8,"ETE/ETU","petit bateau",174.0],[2023,8,"Svago","austria",900.0],[2023,8,"Svago","piscina",62.0],[2023,8,"Varie","amazon",60.0],[2023,8,"Svago","campus",70.0],[2023,8,"Svago","Campus",80.0],[2023,8,"Svago","Spese varie austria stima",1300.0],[2023,8,"Auto","Benzina",300.0],[2023,8,"Spesa","spesa",240.0],[2023,8,"Spesa","amazon",150.0],[2023,8,"Varie","campus",50.0],[2023,8,"ETE/ETU","Bici ete",250.0],[2023,8,"Varie","ceretta",69.0],[2023,9,"Entrate","Stipendio Chiara",1700.0],[2023,9,"Entrate","Stipendio Cosimo",3370.0],[2023,9,"TV/internet/Cell","Cellulari abb",20.0],[2023,9,"Elettricità/Gas","Elettricita/Gas",150.0],[2023,9,"TV/internet/Cell","TV + Internet",30.0],[2023,9,"Casa","Mutuo",480.0],[2023,9,"TARI","TARI",22.0],[2023,9,"Varie","Dropbox+Amazon Prime",15.83],[2023,9,"Casa","Acqua",20.0],[2023,9,"Palestra ETATO","Palestra Eta/Eto",66.67],[2023,9,"Casa","Spese condominiali",46.67],[2023,9,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2023,9,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2023,9,"Varie","Abbonamenti",120.06],[2023,9,"Entrate","ete",125.0],[2023,9,"Spesa","spesa",800.0],[2023,9,"Svago","campus",55.0],[2023,9,"ETE/ETU","babylodge",190.0],[2023,9,"ETE/ETU","lovery",146.0],[2023,9,"Spesa","amazon",350.0],[2023,9,"Svago","gelati/yogurt",50.0],[2023,9,"Entrate","Bonus nido 2023 (prima rata)",1300.0],[2023,9,"Svago","horti Simone",70.0],[2023,9,"Svago","sabto horti aperti",123.0],[2023,9,"ETE/ETU","vestitini adelaide",45.0],[2023,9,"Varie","pranzo eta eto",40.0],[2023,9,"Spesa","unes",44.0],[2023,9,"Palestra ETATO","palestreto",860.0],[2023,9,"ETE/ETU","zipster",144.0],[2023,9,"ETE/ETU","bimbo store",45.0],[2023,9,"ETE/ETU","tartallegre",630.0],[2023,9,"Svago","pizza",20.0],[2023,9,"Varie","pagne",34.0],[2023,9,"Svago","Aereo Natale",520.0],[2023,9,"Varie","ceretta",68.0],[2023,9,"Svago","pranzo dondè",72.0],[2023,10,"Entrate","Stipendio Chiara",1700.0],[2023,10,"Entrate","Stipendio Cosimo",3370.0],[2023,10,"TV/internet/Cell","Cellulari abb",20.0],[2023,10,"Elettricità/Gas","Elettricita/Gas",150.0],[2023,10,"TV/internet/Cell","TV + Internet",30.0],[2023,10,"Casa","Mutuo",480.0],[2023,10,"TARI","TARI",22.0],[2023,10,"Varie","Dropbox+Amazon Prime",15.83],[2023,10,"Casa","Acqua",20.0],[2023,10,"Palestra ETATO","Palestra Eta/Eto",66.67],[2023,10,"Casa","Spese condominiali",46.67],[2023,10,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2023,10,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2023,10,"Varie","Abbonamenti",120.06],[2023,10,"Entrate","ete",125.0],[2023,10,"Spesa","spesa",900.0],[2023,10,"ETE/ETU","tartallegre",565.0],[2023,10,"Spesa","amazon",400.0],[2023,10,"Svago","boccapane",80.0],[2023,10,"ETE/ETU","giochi+libri",80.0],[2023,10,"Svago","pizza",15.0],[2023,10,"Varie","zipster",140.0],[2023,10,"Svago","cinese",20.0],[2023,10,"Svago","corso",70.0],[2023,10,"Auto","benzina",75.0],[2023,10,"ETE/ETU","pannolini",50.0],[2023,10,"Svago","eto",42.0],[2023,10,"Varie","pizza",14.0],[2023,10,"Spesa","ecobaby",80.0],[2023,10,"Svago","greco",20.0],[2023,10,"ETE/ETU","vestitini adelaide+regaleto",220.0],[2023,10,"Varie","esami sangue",98.0],[2023,10,"Svago","pranzo",40.0],[2023,10,"Varie","farmacia",60.0],[2023,11,"Entrate","Stipendio Chiara",1700.0],[2023,11,"Entrate","Stipendio Cosimo",3370.0],[2023,11,"TV/internet/Cell","Cellulari abb",20.0],[2023,11,"Elettricità/Gas","Elettricita/Gas",150.0],[2023,11,"TV/internet/Cell","TV + Internet",30.0],[2023,11,"Casa","Mutuo",480.0],[2023,11,"TARI","TARI",22.0],[2023,11,"Varie","Dropbox+Amazon Prime",15.83],[2023,11,"Casa","Acqua",20.0],[2023,11,"Palestra ETATO","Palestra Eta/Eto",66.67],[2023,11,"Casa","Spese condominiali",46.67],[2023,11,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2023,11,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2023,11,"Varie","Abbonamenti",120.06],[2023,11,"Entrate","ete",125.0],[2023,11,"Spesa","spesa",900.0],[2023,11,"ETE/ETU","tartallegre",470.0],[2023,11,"Varie","giacche",250.0],[2023,11,"Varie","Scarpe",208.0],[2023,11,"Varie","Visite",307.0],[2023,11,"Spesa","amazon",700.0],[2023,11,"Spesa","carrefour",30.0],[2023,11,"Svago","pranzi campus",70.0],[2023,11,"ETE/ETU","treno",114.0],[2023,11,"Auto","benzina",70.0],[2023,11,"Varie","farmacia",92.0],[2023,11,"Svago","yoga",111.0],[2023,11,"Varie","orecchini",38.0],[2023,12,"Entrate","Stipendio Chiara",1700.0],[2023,12,"Entrate","Stipendio Cosimo",3370.0],[2023,12,"TV/internet/Cell","Cellulari abb",20.0],[2023,12,"Elettricità/Gas","Elettricita/Gas",150.0],[2023,12,"TV/internet/Cell","TV + Internet",30.0],[2023,12,"Casa","Mutuo",480.0],[2023,12,"TARI","TARI",22.0],[2023,12,"Varie","Dropbox+Amazon Prime",15.83],[2023,12,"Casa","Acqua",20.0],[2023,12,"Palestra ETATO","Palestra Eta/Eto",66.67],[2023,12,"Casa","Spese condominiali",46.67],[2023,12,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2023,12,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2023,12,"Varie","Abbonamenti",120.06],[2023,12,"Entrate","ete",125.0],[2023,12,"Spesa","spesa",900.0],[2023,12,"ETE/ETU","tartallegre",617.0],[2023,12,"Varie","amazon",400.0],[2023,12,"ETE/ETU","giacche adelaidina",80.0],[2023,12,"ETE/ETU","petit bateau",202.0],[2023,12,"Varie","occhiali",450.0],[2023,12,"Varie","marchitelli",150.0],[2023,12,"Varie","esame sangue",70.0],[2023,12,"Svago","cinese+pizza",60.0],[2023,12,"Svago","yoga",200.0],[2023,12,"ETE/ETU","pannolini",50.0],[2023,12,"Varie","medicine",67.0],[2023,12,"Varie","regali natale",80.0],[2023,12,"Svago","pranzo fuori",70.0],[2023,12,"Varie","dna",902.0],[2023,12,"Svago","grottaglie",200.0],[2023,12,"ETE/ETU","lovevery",146.0],[2024,1,"Entrate","Stipendio Chiara",1700.0],[2024,1,"Entrate","Stipendio Cosimo",3370.0],[2024,1,"TV/internet/Cell","Cellulari abb",20.0],[2024,1,"Elettricità/Gas","Elettricita/Gas",150.0],[2024,1,"TV/internet/Cell","TV + Internet",30.0],[2024,1,"Casa","Mutuo",480.0],[2024,1,"TARI","TARI",22.0],[2024,1,"Varie","Dropbox+Amazon Prime",15.83],[2024,1,"Casa","Acqua",20.0],[2024,1,"Palestra ETATO","Palestra Eta/Eto",66.67],[2024,1,"Casa","Spese condominiali",46.67],[2024,1,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2024,1,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2024,1,"Varie","Abbonamenti",120.06],[2024,1,"Entrate","ete",125.0],[2024,1,"Spesa","spesa",900.0],[2024,1,"ETE/ETU","tartallegre",586.0],[2024,1,"ETE/ETU","slumbersac",115.0],[2024,1,"Varie","amazon",500.0],[2024,1,"ETE/ETU","frugi",71.0],[2024,1,"Svago","indiano",35.0],[2024,1,"Varie","occitane",135.0],[2024,1,"Svago","intructor live",80.0],[2024,1,"Svago","pranzo horti",80.0],[2024,1,"Svago","museo scienza",90.0],[2024,1,"Auto","benzina",80.0],[2024,1,"Svago","pranzo campus",130.0],[2024,1,"Varie","marchitelli",150.0],[2024,1,"Varie","Albergo Camogli",500.0],[2024,2,"Entrate","Stipendio Chiara",1700.0],[2024,2,"Entrate","Stipendio Cosimo",3370.0],[2024,2,"TV/internet/Cell","Cellulari abb",20.0],[2024,2,"Elettricità/Gas","Elettricita/Gas",150.0],[2024,2,"TV/internet/Cell","TV + Internet",30.0],[2024,2,"Casa","Mutuo",480.0],[2024,2,"TARI","TARI",22.0],[2024,2,"Varie","Dropbox+Amazon Prime",15.83],[2024,2,"Casa","Acqua",20.0],[2024,2,"Palestra ETATO","Palestra Eta/Eto",66.67],[2024,2,"Casa","Spese condominiali",46.67],[2024,2,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2024,2,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2024,2,"Varie","Abbonamenti",120.06],[2024,2,"Entrate","ete",125.0],[2024,2,"Spesa","spesa",900.0],[2024,2,"ETE/ETU","tartallegre",617.0],[2024,2,"ETE/ETU","Purificatore aria tartallegre",150.0],[2024,2,"Varie","ceretta",80.0],[2024,2,"Varie","amazon",400.0],[2024,2,"Spesa","arance/limoni",41.0],[2024,2,"Svago","camogli",650.0],[2024,2,"Svago","horti",91.0],[2024,2,"ETE/ETU","petit bateau",89.0],[2024,2,"Varie","medicine",43.0],[2024,2,"Svago","horti",70.0],[2024,2,"Auto","benzina",70.0],[2024,2,"Varie","lavatrice",700.0],[2024,3,"Entrate","Stipendio Chiara",1700.0],[2024,3,"Entrate","Stipendio Cosimo",3370.0],[2024,3,"TV/internet/Cell","Cellulari abb",20.0],[2024,3,"Elettricità/Gas","Elettricita/Gas",150.0],[2024,3,"TV/internet/Cell","TV + Internet",30.0],[2024,3,"Casa","Mutuo",480.0],[2024,3,"TARI","TARI",22.0],[2024,3,"Varie","Dropbox+Amazon Prime",15.83],[2024,3,"Casa","Acqua",20.0],[2024,3,"Palestra ETATO","Palestra Eta/Eto",66.67],[2024,3,"Casa","Spese condominiali",46.67],[2024,3,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2024,3,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2024,3,"Varie","Abbonamenti",120.06],[2024,3,"Entrate","ete",182.0],[2024,3,"Spesa","spesa",900.0],[2024,3,"ETE/ETU","tartallegre",617.0],[2024,3,"Varie","amazon",400.0],[2024,3,"ETE/ETU","lovevery",146.0],[2024,3,"Varie","esami sangue",36.0],[2024,3,"Varie","ecobaby",144.0],[2024,3,"Varie","marchitelli",150.0],[2024,3,"Varie","prova pressione",45.0],[2024,3,"Svago","horti",60.0],[2024,3,"Varie","Teleofono cosimo",169.0],[2024,3,"Svago","fratelli desideri",135.0],[2024,3,"Varie","medicine",60.0],[2024,3,"Auto","benzina",70.0],[2024,3,"Varie","lavori casa anticipo",500.0],[2024,3,"Svago","vacanza pasqua",1000.0],[2024,4,"Entrate","Stipendio Chiara",1700.0],[2024,4,"Entrate","Stipendio Cosimo",3370.0],[2024,4,"TV/internet/Cell","Cellulari abb",20.0],[2024,4,"Elettricità/Gas","Elettricita/Gas",150.0],[2024,4,"TV/internet/Cell","TV + Internet",30.0],[2024,4,"Casa","Mutuo",480.0],[2024,4,"TARI","TARI",22.0],[2024,4,"Varie","Dropbox+Amazon Prime",15.83],[2024,4,"Casa","Acqua",20.0],[2024,4,"Palestra ETATO","Palestra Eta/Eto",66.67],[2024,4,"Casa","Spese condominiali",46.67],[2024,4,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2024,4,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2024,4,"Varie","Abbonamenti",120.06],[2024,4,"Entrate","ete",182.0],[2024,4,"Spesa","spesa",900.0],[2024,4,"ETE/ETU","tartallegre",617.0],[2024,4,"Varie","amazon",400.0],[2024,4,"Varie","carrera",140.0],[2024,4,"Spesa","carrefour",30.0],[2024,4,"Svago","cinese",30.0],[2024,4,"ETE/ETU","fiocchi di riso",98.0],[2024,4,"Auto","macchina",650.0],[2024,4,"Svago","pranzo mokey",110.0],[2024,4,"ETE/ETU","scarpine adelaidina",60.0],[2024,4,"Varie","marchitelli",150.0],[2024,4,"Varie","endocrinologo",132.0],[2024,4,"Varie","pd",150.0],[2024,4,"Svago","deliveroo",100.0],[2024,4,"Varie","medicine",54.0],[2024,4,"Varie","borse",98.0],[2024,4,"Svago","corso",267.0],[2024,5,"Entrate","Stipendio Chiara",1700.0],[2024,5,"Entrate","Stipendio Cosimo",3370.0],[2024,5,"TV/internet/Cell","Cellulari abb",20.0],[2024,5,"Elettricità/Gas","Elettricita/Gas",150.0],[2024,5,"TV/internet/Cell","TV + Internet",30.0],[2024,5,"Casa","Mutuo",480.0],[2024,5,"TARI","TARI",22.0],[2024,5,"Varie","Dropbox+Amazon Prime",15.83],[2024,5,"Casa","Acqua",20.0],[2024,5,"Palestra ETATO","Palestra Eta/Eto",66.67],[2024,5,"Casa","Spese condominiali",46.67],[2024,5,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2024,5,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2024,5,"Varie","Abbonamenti",120.06],[2024,5,"Entrate","ete",182.0],[2024,5,"Spesa","spesa",950.0],[2024,5,"ETE/ETU","tartallegre",638.0],[2024,5,"Varie","amazon",400.0],[2024,5,"Svago","Orti aperti",25.0],[2024,5,"Spesa","Coop",32.0],[2024,5,"Auto","Benzina",70.0],[2024,5,"Varie","Chitarra",29.0],[2024,5,"ETE/ETU","vestitini",350.0],[2024,5,"Varie","ceretta",72.0],[2024,5,"Varie","campagna elettorale",500.0],[2024,5,"Svago","pranzo campus",100.0],[2024,5,"ETE/ETU","zipster",200.0],[2024,6,"Entrate","Stipendio Chiara",1700.0],[2024,6,"Entrate","Stipendio Cosimo",3370.0],[2024,6,"TV/internet/Cell","Cellulari abb",20.0],[2024,6,"Elettricità/Gas","Elettricita/Gas",150.0],[2024,6,"TV/internet/Cell","TV + Internet",30.0],[2024,6,"Casa","Mutuo",480.0],[2024,6,"TARI","TARI",22.0],[2024,6,"Varie","Dropbox+Amazon Prime",15.83],[2024,6,"Casa","Acqua",20.0],[2024,6,"Palestra ETATO","Palestra Eta/Eto",66.67],[2024,6,"Casa","Spese condominiali",46.67],[2024,6,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2024,6,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2024,6,"Varie","Abbonamenti",120.06],[2024,6,"Entrate","ete",182.0],[2024,6,"Spesa","spesa",950.0],[2024,6,"ETE/ETU","tartallegre",617.0],[2024,6,"Varie","amazon",600.0],[2024,6,"Auto","benzina",70.0],[2024,6,"Svago","pranzo campus",54.0],[2024,6,"Svago","horti",50.0],[2024,6,"ETE/ETU","lovevery",140.0],[2024,6,"Varie","campagna elettorale",500.0],[2024,6,"Varie","marchitelli",150.0],[2024,6,"Svago","massaggi",65.0],[2024,6,"Svago","cena quinta",35.0],[2024,6,"Svago","pranzo libanese",100.0],[2024,6,"Varie","regalo tate",30.0],[2024,6,"Svago","casa romagnese",650.0],[2024,6,"Varie","pranzo campus",40.0],[2024,6,"Varie","parrucchiere",35.0],[2024,6,"Varie","samsung",280.0],[2024,6,"Svago","horti",50.0],[2024,6,"Varie","iscrizione test ammissione università",116.0],[2024,6,"Varie","ecobaby",100.0],[2024,6,"ETE/ETU","bagnetto",73.0],[2024,6,"Svago","pranzi fuori extra",150.0],[2024,6,"Varie","dentista",150.0],[2024,7,"Entrate","Stipendio Chiara",1700.0],[2024,7,"Entrate","Stipendio Cosimo",3370.0],[2024,7,"TV/internet/Cell","Cellulari abb",20.0],[2024,7,"Elettricità/Gas","Elettricita/Gas",150.0],[2024,7,"TV/internet/Cell","TV + Internet",30.0],[2024,7,"Casa","Mutuo",480.0],[2024,7,"TARI","TARI",22.0],[2024,7,"Varie","Dropbox+Amazon Prime",15.83],[2024,7,"Casa","Acqua",20.0],[2024,7,"Palestra ETATO","Palestra Eta/Eto",66.67],[2024,7,"Casa","Spese condominiali",46.67],[2024,7,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2024,7,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2024,7,"Varie","Abbonamenti",120.06],[2024,7,"Entrate","ete",450.0],[2024,7,"Spesa","spesa",1100.0],[2024,7,"ETE/ETU","tartallegre",400.0],[2024,7,"Varie","amazon",400.0],[2024,7,"Svago","pranzi fuori",200.0],[2024,7,"ETE/ETU","stokke Liliana",150.0],[2024,7,"Svago","romagnese",650.0],[2024,7,"Svago","cena fuori",80.0],[2024,7,"ETE/ETU","pannolini",30.0],[2024,7,"ETE/ETU","borse",69.0],[2024,7,"Svago","campus piscina",450.0],[2024,7,"Svago","pranzi/cene",300.0],[2024,7,"Varie","yoga",190.0],[2024,7,"Varie","fiocchi di riso",72.0],[2024,7,"Varie","piscina",100.0],[2024,7,"Varie","ceretta",42.0],[2024,7,"ETE/ETU","foto",10.0],[2024,7,"ETE/ETU","libri",56.0],[2024,8,"Entrate","Stipendio Chiara",1700.0],[2024,8,"Entrate","Stipendio Cosimo",3370.0],[2024,8,"TV/internet/Cell","Cellulari abb",20.0],[2024,8,"Elettricità/Gas","Elettricita/Gas",150.0],[2024,8,"TV/internet/Cell","TV + Internet",30.0],[2024,8,"Casa","Mutuo",480.0],[2024,8,"TARI","TARI",22.0],[2024,8,"Varie","Dropbox+Amazon Prime",15.83],[2024,8,"Casa","Acqua",20.0],[2024,8,"Palestra ETATO","Palestra Eta/Eto",66.67],[2024,8,"Casa","Spese condominiali",46.67],[2024,8,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2024,8,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2024,8,"Varie","Abbonamenti",120.06],[2024,8,"Entrate","ete",450.0],[2024,8,"Spesa","spesa",1100.0],[2024,8,"Auto","rata macchina",330.0],[2024,8,"Varie","romagnese",650.0],[2024,8,"Svago","extra romagnese",500.0],[2024,8,"Varie","amazon",500.0],[2024,8,"Svago","corso yoga nido",260.0],[2024,8,"Varie","varie",500.0],[2024,8,"Auto","pieno",220.0],[2024,9,"Entrate","Stipendio Chiara",1700.0],[2024,9,"Entrate","Stipendio Cosimo",3370.0],[2024,9,"TV/internet/Cell","Cellulari abb",20.0],[2024,9,"Elettricità/Gas","Elettricita/Gas",150.0],[2024,9,"TV/internet/Cell","TV + Internet",30.0],[2024,9,"Casa","Mutuo",480.0],[2024,9,"TARI","TARI",22.0],[2024,9,"Varie","Dropbox+Amazon Prime",15.83],[2024,9,"Casa","Acqua",20.0],[2024,9,"Palestra ETATO","Palestra Eta/Eto",66.67],[2024,9,"Casa","Spese condominiali",46.67],[2024,9,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2024,9,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2024,9,"Varie","Abbonamenti",120.06],[2024,9,"Entrate","Assegno unico",450.0],[2024,9,"Spesa","spesa",1100.0],[2024,9,"ETE/ETU","tartallegre",460.0],[2024,9,"Varie","amazon",400.0],[2024,9,"Auto","rata macchina",330.0],[2024,9,"ETE/ETU","tata anna",400.0],[2024,9,"Svago","mercato europeo",50.0],[2024,9,"Varie","CERETTA",63.0],[2024,9,"Svago","pranzo bon ton",21.0],[2024,9,"Varie","marchitelli",180.0],[2024,9,"Auto","benzina",100.0],[2024,9,"Svago","pranzi fuori",73.0],[2024,9,"ETE/ETU","extra",100.0],[2024,9,"Svago","pranzo",100.0],[2024,9,"Varie","regali+borsa",80.0],[2024,9,"Svago","horti",20.0],[2024,9,"ETE/ETU","scarpe",40.0],[2024,9,"Varie","ferrante",60.0],[2024,9,"Varie","vestiti",140.0],[2024,9,"ETE/ETU","tuta",43.0],[2024,9,"ETE/ETU","rugby",250.0],[2024,9,"Varie","regalo federico",20.0],[2024,10,"Entrate","Stipendio Chiara",1700.0],[2024,10,"Entrate","Stipendio Cosimo",3370.0],[2024,10,"TV/internet/Cell","Cellulari abb",20.0],[2024,10,"Elettricità/Gas","Elettricita/Gas",150.0],[2024,10,"TV/internet/Cell","TV + Internet",30.0],[2024,10,"Casa","Mutuo",480.0],[2024,10,"TARI","TARI",22.0],[2024,10,"Varie","Dropbox+Amazon Prime",15.83],[2024,10,"Casa","Acqua",20.0],[2024,10,"Palestra ETATO","Palestra Eta/Eto",66.67],[2024,10,"Casa","Spese condominiali",46.67],[2024,10,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2024,10,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2024,10,"Varie","Abbonamenti",120.06],[2024,10,"Entrate","Assegno unico",450.0],[2024,10,"Spesa","spesa",1100.0],[2024,10,"ETE/ETU","tartallegre",660.5],[2024,10,"Varie","amazon",400.0],[2024,10,"Auto","rata macchina",330.0],[2024,10,"ETE/ETU","bambola",50.0],[2024,10,"Svago","deliveroo",150.0],[2024,10,"Svago","spazio gioco",45.0],[2024,10,"Varie","yoga",150.0],[2024,10,"ETE/ETU","vestiti",202.0],[2024,10,"Varie","scarpe+stivali",130.0],[2024,10,"Svago","deliveroo",50.0],[2024,10,"Svago","corri pavia",30.0],[2024,10,"ETE/ETU","libri",70.0],[2024,10,"Varie","passaporto",130.0],[2024,10,"Svago","pranzo campus",60.0],[2024,10,"ETE/ETU","vestiti",103.0],[2024,10,"Svago","extra",400.0],[2024,10,"Varie","tiger",30.0],[2024,10,"Varie","tessera spazio gioco",15.0],[2024,10,"Svago","bruxelles aerei",500.0],[2024,10,"ETE/ETU","stanza sale",72.0],[2024,11,"Entrate","Stipendio Chiara",1700.0],[2024,11,"Entrate","Stipendio Cosimo",3370.0],[2024,11,"TV/internet/Cell","Cellulari abb",20.0],[2024,11,"Elettricità/Gas","Elettricita/Gas",150.0],[2024,11,"TV/internet/Cell","TV + Internet",30.0],[2024,11,"Casa","Mutuo",480.0],[2024,11,"TARI","TARI",22.0],[2024,11,"Varie","Dropbox+Amazon Prime",15.83],[2024,11,"Casa","Acqua",20.0],[2024,11,"Palestra ETATO","Palestra Eta/Eto",66.67],[2024,11,"Casa","Spese condominiali",46.67],[2024,11,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2024,11,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2024,11,"Varie","Abbonamenti",120.06],[2024,11,"Entrate","Assegno unico",450.0],[2024,11,"Spesa","spesa",1100.0],[2024,11,"ETE/ETU","tartallegre",592.25],[2024,11,"Varie","amazon",400.0],[2024,11,"Auto","rata macchina",330.0],[2024,11,"ETE/ETU","asilo lili",750.0],[2024,11,"Varie","regalo nonni",52.0],[2024,11,"Svago","deliveroo",200.0],[2024,11,"Svago","bruxelles",600.0],[2024,11,"ETE/ETU","vestiti bimbe",260.0],[2024,11,"Varie","Altro",500.0],[2024,11,"ETE/ETU","teatro",43.0],[2024,11,"Varie","petit bateau",100.0],[2024,12,"Entrate","Stipendio Chiara",1700.0],[2024,12,"Entrate","Stipendio Cosimo",3370.0],[2024,12,"TV/internet/Cell","Cellulari abb",20.0],[2024,12,"Elettricità/Gas","Elettricita/Gas",150.0],[2024,12,"TV/internet/Cell","TV + Internet",30.0],[2024,12,"Casa","Mutuo",480.0],[2024,12,"TARI","TARI",22.0],[2024,12,"Varie","Dropbox+Amazon Prime",15.83],[2024,12,"Casa","Acqua",20.0],[2024,12,"Palestra ETATO","Palestra Eta/Eto",66.67],[2024,12,"Casa","Spese condominiali",46.67],[2024,12,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2024,12,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2024,12,"Varie","Abbonamenti",120.06],[2024,12,"Entrate","Assegno unico",450.0],[2024,12,"Spesa","spesa",1100.0],[2024,12,"ETE/ETU","tartallegre",250.0],[2024,12,"Varie","amazon",400.0],[2024,12,"Auto","rata macchina",330.0],[2024,12,"Varie","università",32.0],[2024,12,"Varie","Aerei natale",1100.0],[2024,12,"Svago","pranzi fuori cinese",195.0],[2024,12,"ETE/ETU","maglioni",140.0],[2024,12,"ETE/ETU","libri",40.0],[2024,12,"Varie","extra",20.0],[2024,12,"Svago","grottaglie",400.0],[2024,12,"Svago","pattinaggio",100.0],[2024,12,"ETE/ETU","vestiti",150.0],[2024,12,"ETE/ETU","Seggiolino lili",200.0],[2025,1,"Entrate","Stipendio Chiara",1700.0],[2025,1,"Entrate","Stipendio Cosimo",3370.0],[2025,1,"TV/internet/Cell","Cellulari abb",20.0],[2025,1,"Elettricità/Gas","Elettricita/Gas",150.0],[2025,1,"TV/internet/Cell","TV + Internet",30.0],[2025,1,"Casa","Mutuo",480.0],[2025,1,"TARI","TARI",22.0],[2025,1,"Casa","Acqua",20.0],[2025,1,"Palestra ETATO","Palestra Eta/Eto",70.0],[2025,1,"Casa","Spese condominiali",46.67],[2025,1,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2025,1,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2025,1,"Varie","Abbonamenti",120.06],[2025,1,"Entrate","Assegno unico",450.0],[2025,1,"Spesa","spesa",1063.81],[2025,1,"ETE/ETU","tartallegre",592.25],[2025,1,"ETE/ETU","bolocan",750.0],[2025,1,"Varie","amazon",400.0],[2025,1,"Auto","rata macchina",330.0],[2025,1,"Svago","pranzo fuori cinese",100.0],[2025,1,"Svago","aeroporto",50.0],[2025,1,"Svago","cagliari",700.0],[2025,1,"ETE/ETU","rugby",209.0],[2025,1,"ETE/ETU","vestitini",75.0],[2025,1,"ETE/ETU","seggiolino bici",200.0],[2025,1,"Entrate","Comune Gettoni",800.0],[2025,1,"Svago","pranzi fuori",100.0],[2025,1,"Varie","regalo martina",150.0],[2025,1,"ETE/ETU","fao",50.0],[2025,1,"ETE/ETU","Bici",350.0],[2025,2,"Entrate","Stipendio Chiara",1700.0],[2025,2,"Entrate","Stipendio Cosimo",3370.0],[2025,2,"TV/internet/Cell","Cellulari abb",20.0],[2025,2,"Elettricità/Gas","Elettricita/Gas",150.0],[2025,2,"TV/internet/Cell","TV + Internet",30.0],[2025,2,"Casa","Mutuo",480.0],[2025,2,"TARI","TARI",22.0],[2025,2,"Casa","Acqua",20.0],[2025,2,"Palestra ETATO","Palestra Eta/Eto",70.0],[2025,2,"Casa","Spese condominiali",46.67],[2025,2,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2025,2,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2025,2,"Varie","Abbonamenti",120.06],[2025,2,"Entrate","Assegno unico",450.0],[2025,2,"Spesa","spesa",1063.81],[2025,2,"ETE/ETU","tartallegre",615.0],[2025,2,"ETE/ETU","bolocan",750.0],[2025,2,"Varie","amazon",850.0],[2025,2,"Auto","rata macchina",330.0],[2025,2,"ETE/ETU","bici Adelaide",200.0],[2025,2,"Varie","libri",50.0],[2025,2,"Svago","pizza",50.0],[2025,2,"ETE/ETU","compleanno Adelaidina",50.0],[2025,2,"Varie","Materiale edile",300.0],[2025,2,"Entrate","Bonus nido",545.0],[2025,2,"Varie","jeans",71.0],[2025,2,"Varie","benzina",40.0],[2025,2,"Auto","benzina",70.0],[2025,2,"Varie","zaino",50.0],[2025,2,"Svago","campus",40.0],[2025,2,"Svago","greco",28.0],[2025,3,"Entrate","Stipendio Chiara",1700.0],[2025,3,"Entrate","Stipendio Cosimo",3370.0],[2025,3,"TV/internet/Cell","Cellulari abb",20.0],[2025,3,"Elettricità/Gas","Elettricita/Gas",150.0],[2025,3,"TV/internet/Cell","TV + Internet",30.0],[2025,3,"Casa","Mutuo",480.0],[2025,3,"TARI","TARI",22.0],[2025,3,"Casa","Acqua",20.0],[2025,3,"Palestra ETATO","Palestra Eta/Eto",70.0],[2025,3,"Casa","Spese condominiali",46.67],[2025,3,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2025,3,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2025,3,"Varie","Abbonamenti",120.06],[2025,3,"Entrate","Assegno unico",450.0],[2025,3,"Spesa","spesa",1063.81],[2025,3,"ETE/ETU","tartallegre",592.25],[2025,3,"ETE/ETU","bolocan",750.0],[2025,3,"Auto","rata macchina",330.0],[2025,3,"ETE/ETU","ikea",800.0],[2025,3,"Svago","libri e Adelaidina",100.0],[2025,3,"Varie","tezenis",72.0],[2025,3,"Svago","pizze",90.0],[2025,3,"ETE/ETU","libri e Adelaidina",100.0],[2025,3,"Varie","dentifrici",40.0],[2025,3,"Svago","cene",100.0],[2025,4,"Entrate","Stipendio Chiara",1800.0],[2025,4,"Entrate","Stipendio Cosimo",3370.0],[2025,4,"TV/internet/Cell","Cellulari abb",20.0],[2025,4,"Elettricità/Gas","Elettricita/Gas",150.0],[2025,4,"TV/internet/Cell","TV + Internet",30.0],[2025,4,"Casa","Mutuo",480.0],[2025,4,"TARI","TARI",22.0],[2025,4,"Casa","Acqua",20.0],[2025,4,"Palestra ETATO","Palestra Eta/Eto",70.0],[2025,4,"Casa","Spese condominiali",46.67],[2025,4,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2025,4,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2025,4,"Varie","Abbonamenti",120.06],[2025,4,"Entrate","Assegno unico",450.0],[2025,4,"Spesa","spesa",1000.0],[2025,4,"ETE/ETU","tartallegre",380.0],[2025,4,"Varie","Amazon",383.42],[2025,4,"ETE/ETU","bolocan",750.0],[2025,4,"Auto","rata macchina",330.0],[2025,4,"Svago","milano 2 giorni",150.0],[2025,4,"Varie","gelato",37.0],[2025,4,"Svago","pizza",35.0],[2025,4,"Spesa","frutta",21.0],[2025,4,"ETE/ETU","principessa",15.0],[2025,4,"Svago","indiano",30.0],[2025,4,"Svago","pizza",60.0],[2025,4,"ETE/ETU","action figure/bambole",60.0],[2025,4,"Svago","cinese",50.0],[2025,4,"Svago","trenitno",900.0],[2025,4,"Entrate","Comune",450.0],[2025,4,"Varie","Scarpe Cosimo",90.0],[2025,4,"Varie","Dentista",264.0],[2025,4,"Varie","Vestiti matrimonio",150.0],[2025,4,"ETE/ETU","Iscrizione Liliana 2026",220.5],[2025,4,"Svago","Treno Roma",350.0],[2025,4,"Entrate","Bonus nido 1",220.0],[2025,5,"Entrate","Stipendio Chiara",1800.0],[2025,5,"Entrate","Stipendio Cosimo",3370.0],[2025,5,"TV/internet/Cell","Cellulari abb",20.0],[2025,5,"Elettricità/Gas","Elettricita/Gas",150.0],[2025,5,"TV/internet/Cell","TV + Internet",30.0],[2025,5,"Casa","Mutuo",480.0],[2025,5,"TARI","TARI",22.0],[2025,5,"Casa","Acqua",20.0],[2025,5,"Palestra ETATO","Palestra Eta/Eto",70.0],[2025,5,"Casa","Spese condominiali",46.67],[2025,5,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2025,5,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2025,5,"Varie","Abbonamenti",120.06],[2025,5,"Entrate","Assegno unico",450.0],[2025,5,"Spesa","spesa",557.29],[2025,5,"ETE/ETU","tartallegre",603.0],[2025,5,"ETE/ETU","bolocan",750.0],[2025,5,"Auto","rata macchina",330.0],[2025,5,"Svago","primo maggio",50.0],[2025,5,"Svago","pranzo loft",110.0],[2025,5,"Varie","pizza",28.0],[2025,5,"Spesa","frutta",31.0],[2025,5,"Svago","greco",32.0],[2025,5,"Svago","gelato",37.0],[2025,5,"Varie","Asciugatrice",500.0],[2025,5,"Svago","Benzina",60.0],[2025,5,"Auto","Benzina",80.0],[2025,5,"ETE/ETU","vestiti",75.0],[2025,5,"Varie","letto portatile",103.0],[2025,5,"Svago","gelato",37.0],[2025,5,"Varie","amazon",450.0],[2025,5,"Varie","medicine",40.0],[2025,5,"Svago","indiano+pizza",60.0],[2025,6,"Entrate","Stipendio Chiara",1800.0],[2025,6,"Entrate","Stipendio Cosimo",4180.0],[2025,6,"TV/internet/Cell","Cellulari abb",20.0],[2025,6,"Elettricità/Gas","Elettricita/Gas",150.0],[2025,6,"TV/internet/Cell","TV + Internet",30.0],[2025,6,"Casa","Mutuo",480.0],[2025,6,"TARI","TARI",22.0],[2025,6,"Casa","Acqua",20.0],[2025,6,"Palestra ETATO","Palestra Eta/Eto",70.0],[2025,6,"Casa","Spese condominiali",46.67],[2025,6,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2025,6,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2025,6,"Varie","Abbonamenti",120.06],[2025,6,"Entrate","Assegno unico",450.0],[2025,6,"Spesa","spesa",557.29],[2025,6,"ETE/ETU","tartallegre",537.0],[2025,6,"ETE/ETU","bolocan",750.0],[2025,6,"Auto","rata macchina",330.0],[2025,6,"Varie","amazon",400.0],[2025,6,"Svago","pizza",30.0],[2025,6,"Varie","regalo Mariangela",800.0],[2025,6,"Varie","libri",80.0],[2025,6,"Varie","ceretta",72.0],[2025,6,"Varie","camicia",90.0],[2025,6,"Svago","Roma",1000.0],[2025,6,"Svago","piscina",100.0],[2025,6,"Svago","pizza+gelato",50.0],[2025,6,"Entrate","bonus nido 1 rata",1309.0],[2025,6,"Svago","monaco",1400.0],[2025,7,"Entrate","Stipendio Chiara",1800.0],[2025,7,"Entrate","Stipendio Cosimo",4180.0],[2025,7,"TV/internet/Cell","Cellulari abb",20.0],[2025,7,"Elettricità/Gas","Elettricita/Gas",150.0],[2025,7,"TV/internet/Cell","TV + Internet",30.0],[2025,7,"Casa","Mutuo",480.0],[2025,7,"TARI","TARI",22.0],[2025,7,"Casa","Acqua",20.0],[2025,7,"Palestra ETATO","Palestra Eta/Eto",70.0],[2025,7,"Casa","Spese condominiali",46.67],[2025,7,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2025,7,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2025,7,"Varie","Abbonamenti",120.06],[2025,7,"Entrate","Assegno unico",450.0],[2025,7,"Spesa","spesa",550.0],[2025,7,"ETE/ETU","tartallegre",850.0],[2025,7,"ETE/ETU","bolocan",750.0],[2025,7,"Auto","rata macchina",330.0],[2025,7,"Varie","amazon",400.0],[2025,7,"Entrate","Bonus nido 2 trance",450.0],[2025,7,"Svago","merende",50.0],[2025,7,"Svago","indiano",30.0],[2025,7,"ETE/ETU","vestitini",90.0],[2025,7,"Varie","ceretta",68.0],[2025,7,"ETE/ETU","libri",23.0],[2025,7,"ETE/ETU","regalo tate fine anno",100.0],[2025,7,"Svago","indiano+campus",100.0],[2025,7,"Varie","visita",90.0],[2025,7,"ETE/ETU","scarpe rosse",25.0],[2025,7,"Varie","clara",100.0],[2025,7,"Varie","camicie",100.0],[2025,7,"Varie","busto",134.0],[2025,7,"Varie","risonanza",152.0],[2025,7,"Spesa","Berlino",1000.0],[2025,7,"Entrate","Gettoni",250.0],[2025,7,"Auto","Benzina",70.0],[2025,8,"Entrate","Stipendio Chiara",1800.0],[2025,8,"Entrate","Stipendio Cosimo",4180.0],[2025,8,"TV/internet/Cell","Cellulari abb",20.0],[2025,8,"Elettricità/Gas","Elettricita/Gas",150.0],[2025,8,"TV/internet/Cell","TV + Internet",30.0],[2025,8,"Casa","Mutuo",480.0],[2025,8,"TARI","TARI",22.0],[2025,8,"Casa","Acqua",20.0],[2025,8,"Casa","Spese condominiali",46.67],[2025,8,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2025,8,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2025,8,"Varie","Abbonamenti",120.06],[2025,8,"Entrate","Assegno unico",450.0],[2025,8,"Svago","Aereo",850.0],[2025,8,"Entrate","Bonus nido",600.0],[2025,8,"Varie","Prelievo",200.0],[2025,8,"Varie","Grottaglie",300.0],[2025,8,"Auto","Benzina Michela",70.0],[2025,8,"Spesa","Spesa",300.0],[2025,8,"Entrate","Soldi Papa",10000.0],[2025,8,"ETE/ETU","Spazio gioco",260.0],[2025,8,"Svago","merende yogurt",18.0],[2025,8,"Svago","cinema",30.0],[2025,8,"Varie","Perizia",281.0],[2025,8,"Varie","scarpe",60.0],[2025,8,"Varie","jeans",170.0],[2025,8,"Svago","pizza",27.0],[2025,8,"Svago","torta",30.0],[2025,8,"Spesa","spesa carrefour",76.0],[2025,9,"Entrate","Stipendio Chiara",1800.0],[2025,9,"Entrate","Stipendio Cosimo",4180.0],[2025,9,"TV/internet/Cell","Cellulari abb",20.0],[2025,9,"Elettricità/Gas","Elettricita/Gas",150.0],[2025,9,"TV/internet/Cell","TV + Internet",30.0],[2025,9,"Casa","Mutuo",480.0],[2025,9,"TARI","TARI",22.0],[2025,9,"Casa","Acqua",20.0],[2025,9,"Palestra ETATO","Palestra Eta/Eto",65.0],[2025,9,"Casa","Spese condominiali",46.67],[2025,9,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2025,9,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2025,9,"Varie","Abbonamenti",120.06],[2025,9,"Entrate","Assegno unico",360.0],[2025,9,"ETE/ETU","bolocan",453.2],[2025,9,"ETE/ETU","peter pan",56.0],[2025,9,"Varie","biro+palloncini",41.0],[2025,9,"Svago","pranzo horti",38.0],[2025,9,"Svago","cinese con ferrante",65.0],[2025,9,"Svago","gelato con sonia",19.0],[2025,9,"Spesa","spesa",200.0],[2025,9,"Svago","merenda yogurt",12.0],[2025,9,"Varie","pattini",50.0],[2025,9,"Varie","bici",50.0],[2025,9,"Varie","libri",25.0],[2025,9,"Spesa","spesa",68.0],[2025,9,"Varie","amazon e regali compleanni",100.0],[2025,9,"Varie","ceretta",73.0],[2025,9,"Svago","cinese+pizza",80.0],[2025,9,"Svago","dvd",38.0],[2025,9,"Varie","vestito",68.0],[2025,9,"Svago","cinese",62.0],[2025,9,"Varie","sblocco soldi",200.0],[2025,9,"Svago","cinese",50.0],[2025,9,"Varie","camere d'aria",35.0],[2025,9,"Svago","ricarica caffè",15.0],[2025,9,"Spesa","spesa",200.0],[2025,9,"Svago","campus",50.0],[2025,9,"Svago","campus",80.0],[2025,9,"Svago","cinese",42.0],[2025,9,"Svago","museo",12.0],[2025,9,"Varie","marmellate",24.0],[2025,10,"Entrate","Stipendio Chiara",1800.0],[2025,10,"Entrate","Stipendio Cosimo",4180.0],[2025,10,"TV/internet/Cell","Cellulari abb",20.0],[2025,10,"Elettricità/Gas","Elettricita/Gas",150.0],[2025,10,"TV/internet/Cell","TV + Internet",30.0],[2025,10,"Casa","Mutuo",1260.0],[2025,10,"TARI","TARI",22.0],[2025,10,"Casa","Acqua",20.0],[2025,10,"Palestra ETATO","Palestra Eta/Eto",65.0],[2025,10,"Casa","Spese condominiali",46.67],[2025,10,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2025,10,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2025,10,"Varie","Abbonamenti",120.06],[2025,10,"Entrate","Assegno unico",360.0],[2025,10,"ETE/ETU","bolocan",453.2],[2025,10,"ETE/ETU","ricarica mensa adelaide",200.0],[2025,10,"Svago","libanese",45.0],[2025,10,"Svago","pizze",50.0],[2025,10,"Spesa","spesa unes+altro",130.0],[2025,10,"Spesa","cortilia",190.0],[2025,10,"Varie","amazon con anche cose trasloco",389.0],[2025,10,"ETE/ETU","ecobaby",100.0],[2025,10,"Svago","pizza e cinese",70.0],[2025,10,"Svago","pranzo campus",50.0],[2025,10,"Varie","ceretta",73.0],[2025,10,"Auto","macchina",380.0],[2025,10,"Spesa","unes",110.0],[2025,10,"Spesa","cortilia",180.0],[2025,10,"Svago","spaziogioco",45.0],[2025,10,"Varie","regali e spiderman",117.0],[2025,10,"Varie","torta",38.0],[2025,10,"Svago","ceni e pranzi fuori",300.0],[2025,10,"Varie","libri",50.0],[2025,10,"Entrate","Comune",500.0],[2025,11,"Entrate","Stipendio Chiara",1800.0],[2025,11,"Entrate","Stipendio Cosimo",4180.0],[2025,11,"TV/internet/Cell","Cellulari abb",20.0],[2025,11,"TV/internet/Cell","TV + Internet",30.0],[2025,11,"Casa","Mutuo",500.0],[2025,11,"TARI","TARI",22.0],[2025,11,"Palestra ETATO","Palestra Eta/Eto",65.0],[2025,11,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2025,11,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2025,11,"Varie","Abbonamenti",120.06],[2025,11,"Entrate","Assegno unico",360.0],[2025,11,"ETE/ETU","bolocan",453.2],[2025,11,"ETE/ETU","ricarica mensa adelaide",200.0],[2025,11,"ETE/ETU","città del sole",75.0],[2025,11,"Varie","amazon",253.0],[2025,11,"Spesa","Spesa",250.0],[2025,11,"Svago","indiano+pizza",50.0],[2025,11,"Svago","cinema",37.0],[2025,11,"Spesa","spesa",100.0],[2025,11,"Varie","iphone+garanzia",210.0],[2025,11,"Varie","asciugacapelli",60.0],[2025,11,"Svago","unicorno",30.0],[2025,11,"Varie","sedie",40.0],[2025,11,"Spesa","spesa",200.0],[2025,11,"Spesa","spesa",200.0],[2025,11,"Svago","teatro",40.0],[2025,11,"Spesa","spesa",200.0],[2025,11,"Svago","pizza",50.0],[2025,11,"Varie","scottex",37.0],[2025,11,"Varie","pannolini",22.0],[2025,11,"ETE/ETU","circe",30.0],[2025,11,"Varie","reggiseno",22.0],[2025,11,"ETE/ETU","quaderni colorare",39.36],[2025,11,"Varie","insetticida+pidocchi",38.0],[2025,11,"ETE/ETU","culetto",35.0],[2025,11,"Varie","instructor live",28.0],[2025,11,"Varie","medicine",70.0],[2025,11,"Svago","cinese+pizza",100.0],[2025,11,"ETE/ETU","libro+ scarpine",50.0],[2025,11,"Varie","scarpe",180.0],[2025,12,"Entrate","Stipendio Chiara",1800.0],[2025,12,"Entrate","Stipendio Cosimo",4180.0],[2025,12,"TV/internet/Cell","Cellulari abb",20.0],[2025,12,"Elettricità/Gas","Elettricita/Gas",60.0],[2025,12,"TV/internet/Cell","TV + Internet",30.0],[2025,12,"Casa","Mutuo",1260.0],[2025,12,"TARI","TARI",22.0],[2025,12,"Casa","Acqua",20.0],[2025,12,"Palestra ETATO","Palestra Eta/Eto",65.0],[2025,12,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2025,12,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2025,12,"Varie","Abbonamenti",120.06],[2025,12,"Entrate","Assegno unico",360.0],[2025,12,"ETE/ETU","bolocan",453.2],[2025,12,"ETE/ETU","giochi+colori faccia",50.0],[2025,12,"Auto","benzina",74.0],[2025,12,"Svago","indiano",30.0],[2025,12,"Svago","Aerei natale",930.0],[2025,12,"Svago","greco",35.0],[2025,12,"Svago","cinese",60.0],[2025,12,"Svago","pizza",30.0],[2025,12,"Casa","IMU",400.0],[2025,12,"Svago","teatro",60.0],[2025,12,"Spesa","spesa",400.0],[2025,12,"Varie","amazon",369.0],[2025,12,"ETE/ETU","post",75.0],[2025,12,"Entrate","Versamento contanti regali matteo chiar",700.0],[2025,12,"ETE/ETU","regali adelaide/lili",90.0],[2025,12,"ETE/ETU","musica",94.0],[2025,12,"ETE/ETU","regali adelaide/lili/altri",198.0],[2025,12,"Svago","loft",23.0],[2025,12,"Svago","pizza",25.0],[2025,12,"Varie","panettone",38.0],[2025,12,"Varie","grottaglie",161.0],[2026,1,"Entrate","Stipendio Chiara",1800.0],[2026,1,"Entrate","Stipendio Cosimo",4180.0],[2026,1,"TV/internet/Cell","Cellulari abb",20.0],[2026,1,"Elettricità/Gas","Elettricita/Gas",60.0],[2026,1,"TV/internet/Cell","TV + Internet",30.0],[2026,1,"Casa","Mutuo",1260.0],[2026,1,"TARI","TARI",22.0],[2026,1,"Casa","Acqua",20.0],[2026,1,"Palestra ETATO","Palestra Eta/Eto",65.0],[2026,1,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2026,1,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2026,1,"Varie","Abbonamenti",120.06],[2026,1,"Entrate","Assegno unico",360.0],[2026,1,"ETE/ETU","bolocan",453.2],[2026,1,"Svago","genova",428.0],[2026,1,"ETE/ETU","mensa",202.0],[2026,1,"ETE/ETU","violino",178.0],[2026,1,"Svago","pizza+cinese",80.0],[2026,1,"Spesa","spesa",300.0],[2026,1,"Casa","perizia crif",122.0],[2026,1,"Svago","cinese",46.0],[2026,1,"ETE/ETU","boboli",139.0],[2026,1,"Varie","ikea",67.0],[2026,1,"Varie","tiger",18.0],[2026,1,"Varie","colori+feltrinelli",100.0],[2026,1,"Svago","pizza",24.0],[2026,1,"Spesa","caffe",20.0],[2026,1,"Spesa","glovo",60.0],[2026,1,"ETE/ETU","ovs",50.0],[2026,1,"ETE/ETU","regali aurora",70.0],[2026,1,"ETE/ETU","scarpe",39.0],[2026,1,"Varie","petit bateau",151.0],[2026,1,"Varie","pantaloni",90.0],[2026,1,"Varie","varie amazon",300.0],[2026,1,"Svago","greco",23.0],[2026,1,"Entrate","Comune",730.0],[2026,1,"Svago","Pizza",25.0],[2026,1,"Svago","pane indiano",10.0],[2026,1,"Varie","pennarelli",12.0],[2026,1,"Svago","teatro",25.0],[2026,1,"Spesa","spesa",200.0],[2026,2,"Entrate","Stipendio Chiara",1800.0],[2026,2,"Entrate","Stipendio Cosimo",4180.0],[2026,2,"TV/internet/Cell","Cellulari abb",20.0],[2026,2,"Elettricità/Gas","Elettricita/Gas",60.0],[2026,2,"TV/internet/Cell","TV + Internet",30.0],[2026,2,"Casa","Mutuo",1260.0],[2026,2,"TARI","TARI",22.0],[2026,2,"Casa","Acqua",20.0],[2026,2,"Palestra ETATO","Palestra Eta/Eto",65.0],[2026,2,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2026,2,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2026,2,"Auto","auto",380.0],[2026,2,"Varie","Abbonamenti",120.06],[2026,2,"Entrate","Assegno unico",360.0],[2026,2,"ETE/ETU","bolocan",453.2],[2026,2,"Varie","feltrinelli",87.0],[2026,2,"ETE/ETU","musica",164.0],[2026,2,"Svago","cinese",65.0],[2026,2,"Svago","pizza",33.0],[2026,2,"Svago","regali compleanno",40.0],[2026,2,"Svago","compleanno addobbi/piatti etc",60.0],[2026,2,"Spesa","spesa",200.0],[2026,2,"Spesa","spesa",200.0],[2026,2,"ETE/ETU","vestiti estivi",60.0],[2026,2,"Varie","perizia",122.0],[2026,2,"Svago","crepes",12.0],[2026,2,"Elettricità/Gas","yada energia",60.0],[2026,2,"Spesa","spesa md",53.0],[2026,2,"Auto","benzina",77.0],[2026,2,"Svago","cinese",77.0],[2026,2,"Auto","spesa md",88.0],[2026,2,"Svago","cinese",35.0],[2026,2,"Svago","fiulot",34.0],[2026,2,"Svago","gelato",10.0],[2026,2,"Auto","benzina",64.0],[2026,2,"Svago","la pesa",55.0],[2026,2,"Spesa","carrefour",10.0],[2026,2,"Varie","cinese",62.0],[2026,2,"Varie","cellulari",40.0],[2026,2,"Varie","brico",20.0],[2026,2,"Svago","campus",70.0],[2026,3,"Entrate","Stipendio Chiara",1800.0],[2026,3,"Entrate","Stipendio Cosimo",4180.0],[2026,3,"TV/internet/Cell","Cellulari abb",20.0],[2026,3,"Elettricità/Gas","Elettricita/Gas",60.0],[2026,3,"TV/internet/Cell","TV + Internet",30.0],[2026,3,"Casa","Mutuo",1260.0],[2026,3,"TARI","TARI",22.0],[2026,3,"Casa","Acqua",20.0],[2026,3,"Palestra ETATO","Palestra Eta/Eto",65.0],[2026,3,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2026,3,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2026,3,"Auto","auto",320.0],[2026,3,"Varie","Abbonamenti",120.06],[2026,3,"Entrate","Assegno unico",360.0],[2026,3,"ETE/ETU","bolocan",453.2],[2026,3,"ETE/ETU","ricarica mensa",200.0],[2026,3,"Spesa","carrefuor",20.0],[2026,3,"ETE/ETU","violino",169.0],[2026,3,"Varie","gelato",6.0],[2026,3,"Spesa","carrefuort",60.0],[2026,3,"ETE/ETU","città sole",15.0],[2026,3,"Spesa","cose varie adelaiide",7.0],[2026,3,"Varie","ikea",55.0],[2026,3,"Varie","colazione",7.0],[2026,3,"Svago","cinese",48.0],[2026,3,"Svago","greco",28.0],[2026,3,"Varie","foto",32.0],[2026,3,"Varie","amazon",267.0],[2026,3,"Varie","jeans",67.0],[2026,3,"Svago","yogurt",14.0],[2026,3,"Varie","pizze",60.0],[2026,3,"Spesa","cortilia",200.0],[2026,3,"Spesa","carrefour",60.0],[2026,3,"Varie","farmacia",55.0],[2026,3,"Varie","bouvette",15.0],[2026,3,"Svago","haden",18.0],[2026,3,"Svago","torta",29.0],[2026,3,"Varie","perizia CRIF",122.0],[2026,3,"Varie","Batteria Babboe",779.0],[2026,3,"Varie","ceretta",68.0],[2026,3,"ETE/ETU","musica",200.0],[2026,3,"ETE/ETU","città del sole",70.0],[2026,3,"Spesa","panini",8.0],[2026,3,"Spesa","spesa",200.0],[2026,3,"Auto","benzina",100.0],[2026,4,"Entrate","Stipendio Chiara",1800.0],[2026,4,"Entrate","Stipendio Cosimo",4180.0],[2026,4,"TV/internet/Cell","Cellulari abb",20.0],[2026,4,"Elettricità/Gas","Elettricita/Gas",60.0],[2026,4,"TV/internet/Cell","TV + Internet",30.0],[2026,4,"Casa","Mutuo",1260.0],[2026,4,"TARI","TARI",22.0],[2026,4,"Casa","Acqua",20.0],[2026,4,"Palestra ETATO","Palestra Eta/Eto",65.0],[2026,4,"Casa","Ass Casa+Ass Vita+AssMacchina",65.0],[2026,4,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2026,4,"Auto","auto",320.0],[2026,4,"Varie","Abbonamenti",120.06],[2026,4,"Entrate","Assegno unico",360.0],[2026,4,"ETE/ETU","bolocan",453.2],[2026,4,"Varie","shampoo",40.0],[2026,4,"Varie","foto",20.0],[2026,4,"ETE/ETU","città del sole",149.0],[2026,4,"Svago","cinese",62.0],[2026,4,"Varie","brico",100.0],[2026,4,"Varie","pullman",15.0],[2026,4,"Varie","domenico",24.0],[2026,4,"Svago","pizza",21.0],[2026,4,"Svago","parco preistoria",100.0],[2026,4,"Spesa","carta igienica",18.0],[2026,4,"Spesa","spesa cortilia",200.0],[2026,4,"Varie","amazon",330.0],[2026,4,"ETE/ETU","film",40.0],[2026,4,"Varie","Pezzi bici",170.0],[2026,4,"Svago","stand bike",32.0],[2026,4,"Varie","pantaloni",90.0],[2026,4,"Spesa","spesa cortilia",200.0],[2026,4,"ETE/ETU","dinosauri",50.0],[2026,4,"Varie","piante",75.0],[2026,4,"Varie","città del sole",40.0],[2026,4,"Varie","yogurt",12.0],[2026,4,"Spesa","spesa settimanale+domenico",226.0],[2026,4,"Spesa","spesa",100.0],[2026,4,"Svago","colazione",13.0],[2026,4,"ETE/ETU","flying tiger",14.0],[2026,4,"ETE/ETU","dinosauri",37.0],[2026,4,"Svago","campus",60.0],[2026,5,"Entrate","Stipendio Chiara",1800.0],[2026,5,"Entrate","Stipendio Cosimo",4180.0],[2026,5,"TV/internet/Cell","Cellulari abb",43.0],[2026,5,"Elettricità/Gas","Elettricita/Gas",60.0],[2026,5,"TV/internet/Cell","TV + Internet",30.0],[2026,5,"Casa","Mutuo",1260.0],[2026,5,"TARI","TARI",22.0],[2026,5,"Casa","Acqua",20.0],[2026,5,"Palestra ETATO","Palestra Eta/Eto",65.0],[2026,5,"Casa","Ass Casa+Ass Vita+AssMacchina",142.5],[2026,5,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2026,5,"Auto","auto",350.0],[2026,5,"Varie","Abbonamenti",120.06],[2026,5,"Entrate","Assegno unico",360.0],[2026,5,"ETE/ETU","bolocan",453.2],[2026,5,"Svago","yogurt",15.0],[2026,5,"Spesa","deliveroo",60.0],[2026,5,"Spesa","spesa",213.0],[2026,5,"ETE/ETU","violino",169.0],[2026,5,"ETE/ETU","città del sole",33.0],[2026,5,"Varie","Piante",100.0],[2026,5,"Entrate","Bonus nido",800.0],[2026,5,"Varie","E distribuzione allaccio FV",110.0],[2026,5,"ETE/ETU","zipster",209.0],[2026,5,"Varie","materiale bici",50.0],[2026,5,"Varie","Otturazioni + pulizia cosimo",650.0],[2026,5,"Spesa","spesa",110.0],[2026,5,"ETE/ETU","post Adelaide",60.0],[2026,5,"Entrate","purificatori",100.0],[2026,5,"ETE/ETU","mensa adelaide",220.0],[2026,5,"ETE/ETU","merenda frutta",11.0],[2026,5,"ETE/ETU","yogurt",50.0],[2026,5,"Spesa","spese extra domenico",50.0],[2026,5,"Varie","cinese",53.0],[2026,5,"Varie","Fattura Finale Zucchella",1198.08],[2026,5,"Svago","cinese",83.0],[2026,6,"Entrate","Stipendio Chiara",1800.0],[2026,6,"Entrate","Stipendio Cosimo",4180.0],[2026,6,"TV/internet/Cell","Cellulari abb",43.0],[2026,6,"Elettricità/Gas","Elettricita/Gas",60.0],[2026,6,"TV/internet/Cell","TV + Internet",30.0],[2026,6,"Casa","Mutuo",1260.0],[2026,6,"TARI","TARI",29.17],[2026,6,"Casa","Acqua",20.0],[2026,6,"Palestra ETATO","Palestra Eta/Eto",65.0],[2026,6,"Casa","Ass Casa+Ass Vita+AssMacchina",142.5],[2026,6,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2026,6,"Auto","auto",350.0],[2026,6,"Varie","Abbonamenti",120.06],[2026,6,"Entrate","Assegno unico",360.0],[2026,6,"ETE/ETU","bolocan",453.2],[2026,6,"Varie","mobile giardino",90.0],[2026,6,"Varie","brico",200.0],[2026,6,"Varie","ceretta",73.0],[2026,6,"Svago","yogurt/frutta",50.0],[2026,6,"Svago","libri",23.0],[2026,6,"ETE/ETU","post adelaide",39.0],[2026,6,"Spesa","spesa",220.0],[2026,6,"Varie","brico",500.0],[2026,6,"ETE/ETU","tezenis",25.0],[2026,6,"ETE/ETU","gelato",6.0],[2026,6,"Svago","yogurt/frutta",22.0],[2026,6,"ETE/ETU","tezenis",35.0],[2026,6,"Spesa","spesa",150.0],[2026,6,"Spesa","gelato",40.0],[2026,6,"Varie","Spesa scala giardino",150.0],[2026,6,"ETE/ETU","cred",242.0],[2026,6,"Spesa","gelato",40.0],[2026,6,"Varie","feltrinelli+gelato",50.0],[2026,6,"ETE/ETU","sandaletti",100.0],[2026,6,"Spesa","spesa",350.0],[2026,6,"Svago","gelato",43.0],[2026,6,"Svago","Cinema",100.0],[2026,6,"Spesa","Frutta",30.0],[2026,6,"Svago","Gelato",43.0],[2026,6,"Varie","Liliana",100.0],[2026,6,"Varie","amazon",200.0],[2026,6,"ETE/ETU","giornata Adelaide",50.0],[2026,6,"ETE/ETU","tezenis",25.0],[2026,7,"Entrate","Stipendio Chiara",1800.0],[2026,7,"Entrate","Stipendio Cosimo",4180.0],[2026,7,"TV/internet/Cell","Cellulari abb",43.0],[2026,7,"Elettricità/Gas","Elettricita/Gas",60.0],[2026,7,"TV/internet/Cell","TV + Internet",30.0],[2026,7,"Casa","Mutuo",1260.0],[2026,7,"TARI","TARI",29.17],[2026,7,"Casa","Acqua",25.0],[2026,7,"Palestra ETATO","Palestra Eta/Eto",65.0],[2026,7,"Casa","Ass Casa+Ass Vita+AssMacchina",148.33],[2026,7,"Auto","Ass Casa+Ass Vita+AssMacchina",54.17],[2026,7,"Auto","auto",350.0],[2026,7,"Varie","Abbonamenti",120.06],[2026,7,"Entrate","Assegno unico",360.0],[2026,7,"ETE/ETU","bolocan",453.2],[2026,7,"ETE/ETU","Liliana festa e regali",300.0],[2026,7,"ETE/ETU","vestitini",50.0],[2026,7,"ETE/ETU","Altalena",340.0],[2026,7,"Casa","Fattura Francesca ENEA",226.0],[2026,7,"ETE/ETU","merenda nido",40.0],[2026,7,"Varie","cinese",80.0],[2026,7,"Varie","amazon",350.0],[2026,7,"ETE/ETU","mensa",100.0],[2026,7,"Auto","bolli auto",370.0],[2026,7,"Varie","gelato",40.0],[2026,7,"Spesa","spesa",300.0],[2026,7,"Spesa","spesa",140.0],[2026,7,"Svago","gelato",20.0],[2026,7,"Svago","yogurt",15.0],[2026,7,"Varie","libri",50.0],[2026,7,"Varie","ceretta",68.0],[2026,7,"Svago","bouvette",20.0],[2026,7,"ETE/ETU","libri",25.0],[2026,7,"Spesa","spesa",200.0],[2026,7,"Varie","Assicurazione Consigliere comunale",210.0],[2026,7,"ETE/ETU","vestito+sticker",50.0],[2026,7,"Spesa","spesa extra + sedie",130.0],[2026,7,"Entrate","Rimborso 730",710.0]];
-const BG_SEED = [[2019,11,"Casa",650.0],[2019,11,"Trasporti",150.0],[2019,11,"TARI",22.17],[2019,11,"Elettricità/Gas",250.0],[2019,11,"Spesa",700.0],[2019,11,"Varie",300.0],[2019,11,"Svago",400.0],[2019,12,"Casa",650.0],[2019,12,"Trasporti",150.0],[2019,12,"TARI",22.17],[2019,12,"Elettricità/Gas",250.0],[2019,12,"Spesa",700.0],[2019,12,"Varie",300.0],[2019,12,"Svago",400.0],[2020,2,"Casa",650.0],[2020,2,"Trasporti",150.0],[2020,2,"TARI",22.17],[2020,2,"Elettricità/Gas",250.0],[2020,2,"Spesa",700.0],[2020,2,"Varie",300.0],[2020,2,"Svago",400.0],[2020,1,"Casa",650.0],[2020,1,"Trasporti",150.0],[2020,1,"TARI",22.17],[2020,1,"Elettricità/Gas",250.0],[2020,1,"Spesa",700.0],[2020,1,"Varie",300.0],[2020,1,"Svago",400.0],[2020,4,"Casa",650.0],[2020,4,"Trasporti",150.0],[2020,4,"TARI",22.17],[2020,4,"Elettricità/Gas",250.0],[2020,4,"Spesa",700.0],[2020,4,"Varie",300.0],[2020,4,"Svago",400.0],[2020,3,"Casa",650.0],[2020,3,"Trasporti",150.0],[2020,3,"TARI",22.17],[2020,3,"Elettricità/Gas",250.0],[2020,3,"Spesa",700.0],[2020,3,"Varie",300.0],[2020,3,"Svago",400.0],[2020,5,"Casa",650.0],[2020,5,"Trasporti",150.0],[2020,5,"TARI",22.17],[2020,5,"Elettricità/Gas",250.0],[2020,5,"Spesa",700.0],[2020,5,"Varie",300.0],[2020,5,"Svago",400.0],[2020,6,"Casa",650.0],[2020,6,"Trasporti",150.0],[2020,6,"TARI",22.17],[2020,6,"Elettricità/Gas",250.0],[2020,6,"Spesa",700.0],[2020,6,"Varie",300.0],[2020,6,"Svago",400.0],[2020,7,"Casa",650.0],[2020,7,"Trasporti",150.0],[2020,7,"TARI",22.17],[2020,7,"Elettricità/Gas",250.0],[2020,7,"Spesa",700.0],[2020,7,"Varie",300.0],[2020,7,"Svago",400.0],[2020,8,"Casa",650.0],[2020,8,"Trasporti",150.0],[2020,8,"TARI",22.17],[2020,8,"Elettricità/Gas",250.0],[2020,8,"Spesa",700.0],[2020,8,"Varie",300.0],[2020,8,"Svago",400.0],[2020,9,"Casa",650.0],[2020,9,"Trasporti",150.0],[2020,9,"TARI",22.17],[2020,9,"Elettricità/Gas",250.0],[2020,9,"Spesa",700.0],[2020,9,"Varie",300.0],[2020,9,"Svago",400.0],[2020,10,"Casa",650.0],[2020,10,"Trasporti",150.0],[2020,10,"TARI",22.17],[2020,10,"Elettricità/Gas",250.0],[2020,10,"Spesa",700.0],[2020,10,"Varie",300.0],[2020,10,"Svago",400.0],[2020,11,"Casa",650.0],[2020,11,"Trasporti",150.0],[2020,11,"TARI",22.17],[2020,11,"Elettricità/Gas",250.0],[2020,11,"Spesa",700.0],[2020,11,"Varie",300.0],[2020,11,"Svago",400.0],[2020,12,"Casa",650.0],[2020,12,"Trasporti",150.0],[2020,12,"TARI",22.17],[2020,12,"Elettricità/Gas",250.0],[2020,12,"Spesa",700.0],[2020,12,"Varie",300.0],[2020,12,"Svago",400.0],[2021,1,"Casa",650.0],[2021,1,"Trasporti",150.0],[2021,1,"TARI",22.17],[2021,1,"Elettricità/Gas",250.0],[2021,1,"Spesa",700.0],[2021,1,"Varie",300.0],[2021,1,"Svago",400.0],[2021,2,"Casa",650.0],[2021,2,"Trasporti",150.0],[2021,2,"TARI",22.17],[2021,2,"Elettricità/Gas",250.0],[2021,2,"Spesa",700.0],[2021,2,"Varie",300.0],[2021,2,"Svago",400.0],[2021,3,"Casa",650.0],[2021,3,"Trasporti",150.0],[2021,3,"TARI",22.17],[2021,3,"Elettricità/Gas",250.0],[2021,3,"Spesa",700.0],[2021,3,"Varie",300.0],[2021,3,"Svago",400.0],[2021,4,"Casa",650.0],[2021,4,"Trasporti",150.0],[2021,4,"TARI",22.17],[2021,4,"Elettricità/Gas",250.0],[2021,4,"Spesa",700.0],[2021,4,"Varie",300.0],[2021,4,"Svago",400.0],[2021,5,"Casa",650.0],[2021,5,"Trasporti",150.0],[2021,5,"TARI",22.17],[2021,5,"Elettricità/Gas",250.0],[2021,5,"Spesa",700.0],[2021,5,"Varie",300.0],[2021,5,"Svago",400.0],[2021,6,"Casa",650.0],[2021,6,"Trasporti",150.0],[2021,6,"TARI",22.17],[2021,6,"Elettricità/Gas",250.0],[2021,6,"Spesa",700.0],[2021,6,"Varie",300.0],[2021,6,"Svago",400.0],[2021,7,"Casa",650.0],[2021,7,"Trasporti",150.0],[2021,7,"TARI",22.17],[2021,7,"Elettricità/Gas",250.0],[2021,7,"Spesa",700.0],[2021,7,"Varie",300.0],[2021,7,"Svago",400.0],[2021,8,"Casa",650.0],[2021,8,"Trasporti",150.0],[2021,8,"TARI",22.17],[2021,8,"Elettricità/Gas",250.0],[2021,8,"Spesa",700.0],[2021,8,"Varie",300.0],[2021,8,"Svago",400.0],[2021,9,"Casa",650.0],[2021,9,"Trasporti",150.0],[2021,9,"TARI",22.17],[2021,9,"Elettricità/Gas",250.0],[2021,9,"Spesa",700.0],[2021,9,"Varie",300.0],[2021,9,"Svago",400.0],[2021,10,"Casa",650.0],[2021,10,"Trasporti",150.0],[2021,10,"TARI",22.17],[2021,10,"Elettricità/Gas",250.0],[2021,10,"Spesa",700.0],[2021,10,"Varie",300.0],[2021,10,"Svago",400.0],[2021,11,"Casa",650.0],[2021,11,"Trasporti",150.0],[2021,11,"TARI",22.17],[2021,11,"Elettricità/Gas",250.0],[2021,11,"Spesa",700.0],[2021,11,"Varie",300.0],[2021,11,"Svago",400.0],[2021,12,"Casa",650.0],[2021,12,"Trasporti",150.0],[2021,12,"TARI",22.17],[2021,12,"Elettricità/Gas",250.0],[2021,12,"Spesa",700.0],[2021,12,"Varie",300.0],[2021,12,"Svago",400.0],[2022,1,"Casa",650.0],[2022,1,"Trasporti",150.0],[2022,1,"TARI",22.17],[2022,1,"Elettricità/Gas",250.0],[2022,1,"Spesa",700.0],[2022,1,"Varie",300.0],[2022,1,"Svago",400.0],[2022,1,"ETE/ETU",300.0],[2022,2,"Casa",650.0],[2022,2,"Trasporti",150.0],[2022,2,"TARI",22.17],[2022,2,"Elettricità/Gas",250.0],[2022,2,"Spesa",700.0],[2022,2,"Varie",300.0],[2022,2,"Svago",400.0],[2022,2,"ETE/ETU",300.0],[2022,3,"Casa",650.0],[2022,3,"Trasporti",150.0],[2022,3,"TARI",22.17],[2022,3,"Elettricità/Gas",250.0],[2022,3,"Spesa",700.0],[2022,3,"Varie",300.0],[2022,3,"Svago",400.0],[2022,3,"ETE/ETU",300.0],[2022,4,"Casa",650.0],[2022,4,"Trasporti",150.0],[2022,4,"TARI",22.17],[2022,4,"Elettricità/Gas",250.0],[2022,4,"Spesa",700.0],[2022,4,"Varie",300.0],[2022,4,"Svago",400.0],[2022,4,"ETE/ETU",300.0],[2022,5,"Casa",650.0],[2022,5,"Trasporti",150.0],[2022,5,"TARI",22.17],[2022,5,"Elettricità/Gas",250.0],[2022,5,"Spesa",700.0],[2022,5,"Varie",300.0],[2022,5,"Svago",400.0],[2022,5,"ETE/ETU",300.0],[2022,6,"Casa",650.0],[2022,6,"Trasporti",150.0],[2022,6,"TARI",22.17],[2022,6,"Elettricità/Gas",250.0],[2022,6,"Spesa",700.0],[2022,6,"Varie",300.0],[2022,6,"Svago",400.0],[2022,6,"ETE/ETU",300.0],[2022,7,"Casa",650.0],[2022,7,"Trasporti",150.0],[2022,7,"TARI",22.17],[2022,7,"Elettricità/Gas",250.0],[2022,7,"Spesa",700.0],[2022,7,"Varie",300.0],[2022,7,"Svago",400.0],[2022,7,"ETE/ETU",300.0],[2022,8,"Casa",650.0],[2022,8,"Trasporti",150.0],[2022,8,"TARI",22.17],[2022,8,"Elettricità/Gas",250.0],[2022,8,"Spesa",700.0],[2022,8,"Varie",300.0],[2022,8,"Svago",400.0],[2022,8,"ETE/ETU",300.0],[2022,9,"Casa",650.0],[2022,9,"Trasporti",150.0],[2022,9,"TARI",22.17],[2022,9,"Elettricità/Gas",250.0],[2022,9,"Spesa",700.0],[2022,9,"Varie",300.0],[2022,9,"Svago",400.0],[2022,9,"ETE/ETU",300.0],[2022,10,"Casa",650.0],[2022,10,"Trasporti",150.0],[2022,10,"TARI",22.17],[2022,10,"Elettricità/Gas",250.0],[2022,10,"Spesa",700.0],[2022,10,"Varie",300.0],[2022,10,"Svago",400.0],[2022,10,"ETE/ETU",300.0],[2022,11,"Casa",650.0],[2022,11,"Trasporti",150.0],[2022,11,"TARI",22.17],[2022,11,"Elettricità/Gas",250.0],[2022,11,"Spesa",700.0],[2022,11,"Varie",300.0],[2022,11,"Svago",400.0],[2022,11,"ETE/ETU",300.0],[2022,12,"Casa",650.0],[2022,12,"Trasporti",150.0],[2022,12,"TARI",22.17],[2022,12,"Elettricità/Gas",250.0],[2022,12,"Spesa",700.0],[2022,12,"Varie",300.0],[2022,12,"Svago",400.0],[2022,12,"ETE/ETU",300.0],[2023,1,"Casa",650.0],[2023,1,"Trasporti",150.0],[2023,1,"TARI",22.17],[2023,1,"Elettricità/Gas",250.0],[2023,1,"Spesa",700.0],[2023,1,"Varie",300.0],[2023,1,"Svago",400.0],[2023,1,"ETE/ETU",300.0],[2023,2,"Casa",650.0],[2023,2,"Trasporti",150.0],[2023,2,"TARI",22.17],[2023,2,"Elettricità/Gas",250.0],[2023,2,"Spesa",700.0],[2023,2,"Varie",300.0],[2023,2,"Svago",400.0],[2023,2,"ETE/ETU",300.0],[2023,3,"Casa",650.0],[2023,3,"Trasporti",150.0],[2023,3,"TARI",22.17],[2023,3,"Elettricità/Gas",250.0],[2023,3,"Spesa",700.0],[2023,3,"Varie",300.0],[2023,3,"Svago",400.0],[2023,3,"ETE/ETU",300.0],[2023,4,"Casa",650.0],[2023,4,"Trasporti",150.0],[2023,4,"TARI",22.17],[2023,4,"Elettricità/Gas",250.0],[2023,4,"Spesa",700.0],[2023,4,"Varie",300.0],[2023,4,"Svago",400.0],[2023,4,"ETE/ETU",300.0],[2023,5,"Casa",650.0],[2023,5,"Trasporti",150.0],[2023,5,"TARI",22.17],[2023,5,"Elettricità/Gas",250.0],[2023,5,"Spesa",700.0],[2023,5,"Varie",300.0],[2023,5,"Svago",400.0],[2023,5,"ETE/ETU",300.0],[2023,6,"Casa",650.0],[2023,6,"Trasporti",150.0],[2023,6,"TARI",22.17],[2023,6,"Elettricità/Gas",250.0],[2023,6,"Spesa",700.0],[2023,6,"Varie",300.0],[2023,6,"Svago",400.0],[2023,6,"ETE/ETU",300.0],[2023,7,"Casa",650.0],[2023,7,"Trasporti",150.0],[2023,7,"TARI",22.17],[2023,7,"Elettricità/Gas",250.0],[2023,7,"Spesa",700.0],[2023,7,"Varie",300.0],[2023,7,"Svago",400.0],[2023,7,"ETE/ETU",300.0],[2023,8,"Casa",650.0],[2023,8,"Trasporti",150.0],[2023,8,"TARI",22.17],[2023,8,"Elettricità/Gas",250.0],[2023,8,"Spesa",700.0],[2023,8,"Varie",300.0],[2023,8,"Svago",400.0],[2023,8,"ETE/ETU",300.0],[2023,9,"Casa",650.0],[2023,9,"Trasporti",150.0],[2023,9,"TARI",22.17],[2023,9,"Elettricità/Gas",250.0],[2023,9,"Spesa",700.0],[2023,9,"Varie",300.0],[2023,9,"Svago",400.0],[2023,9,"ETE/ETU",300.0],[2023,10,"Casa",650.0],[2023,10,"Trasporti",150.0],[2023,10,"TARI",22.17],[2023,10,"Elettricità/Gas",250.0],[2023,10,"Spesa",700.0],[2023,10,"Varie",300.0],[2023,10,"Svago",400.0],[2023,10,"ETE/ETU",300.0],[2023,11,"Casa",650.0],[2023,11,"Trasporti",150.0],[2023,11,"TARI",22.17],[2023,11,"Elettricità/Gas",250.0],[2023,11,"Spesa",700.0],[2023,11,"Varie",300.0],[2023,11,"Svago",400.0],[2023,11,"ETE/ETU",300.0],[2023,12,"Casa",650.0],[2023,12,"Trasporti",150.0],[2023,12,"TARI",22.17],[2023,12,"Elettricità/Gas",250.0],[2023,12,"Spesa",700.0],[2023,12,"Varie",300.0],[2023,12,"Svago",400.0],[2023,12,"ETE/ETU",300.0],[2024,1,"Casa",650.0],[2024,1,"Trasporti",150.0],[2024,1,"TARI",22.17],[2024,1,"Elettricità/Gas",250.0],[2024,1,"Spesa",700.0],[2024,1,"Varie",300.0],[2024,1,"Svago",400.0],[2024,1,"ETE/ETU",300.0],[2024,2,"Casa",650.0],[2024,2,"Trasporti",150.0],[2024,2,"TARI",22.17],[2024,2,"Elettricità/Gas",250.0],[2024,2,"Spesa",700.0],[2024,2,"Varie",300.0],[2024,2,"Svago",400.0],[2024,2,"ETE/ETU",300.0],[2024,3,"Casa",650.0],[2024,3,"Trasporti",150.0],[2024,3,"TARI",22.17],[2024,3,"Elettricità/Gas",250.0],[2024,3,"Spesa",700.0],[2024,3,"Varie",300.0],[2024,3,"Svago",400.0],[2024,3,"ETE/ETU",300.0],[2024,4,"Casa",650.0],[2024,4,"Trasporti",150.0],[2024,4,"TARI",22.17],[2024,4,"Elettricità/Gas",250.0],[2024,4,"Spesa",700.0],[2024,4,"Varie",300.0],[2024,4,"Svago",400.0],[2024,4,"ETE/ETU",300.0],[2024,5,"Casa",650.0],[2024,5,"Trasporti",150.0],[2024,5,"TARI",22.17],[2024,5,"Elettricità/Gas",250.0],[2024,5,"Spesa",700.0],[2024,5,"Varie",300.0],[2024,5,"Svago",400.0],[2024,5,"ETE/ETU",300.0],[2024,6,"Casa",650.0],[2024,6,"Trasporti",150.0],[2024,6,"TARI",22.17],[2024,6,"Elettricità/Gas",250.0],[2024,6,"Spesa",700.0],[2024,6,"Varie",300.0],[2024,6,"Svago",400.0],[2024,6,"ETE/ETU",300.0],[2024,7,"Casa",650.0],[2024,7,"Trasporti",150.0],[2024,7,"TARI",22.17],[2024,7,"Elettricità/Gas",250.0],[2024,7,"Spesa",700.0],[2024,7,"Varie",300.0],[2024,7,"Svago",400.0],[2024,7,"ETE/ETU",300.0],[2024,8,"Casa",650.0],[2024,8,"Trasporti",150.0],[2024,8,"TARI",22.17],[2024,8,"Elettricità/Gas",250.0],[2024,8,"Spesa",700.0],[2024,8,"Varie",300.0],[2024,8,"Svago",400.0],[2024,8,"ETE/ETU",300.0],[2024,9,"Casa",650.0],[2024,9,"Trasporti",150.0],[2024,9,"TARI",22.17],[2024,9,"Elettricità/Gas",250.0],[2024,9,"Spesa",700.0],[2024,9,"Varie",300.0],[2024,9,"Svago",400.0],[2024,9,"ETE/ETU",300.0],[2024,10,"Casa",650.0],[2024,10,"Trasporti",150.0],[2024,10,"TARI",22.17],[2024,10,"Elettricità/Gas",250.0],[2024,10,"Spesa",700.0],[2024,10,"Varie",300.0],[2024,10,"Svago",400.0],[2024,10,"ETE/ETU",300.0],[2024,11,"Casa",650.0],[2024,11,"Trasporti",150.0],[2024,11,"TARI",22.17],[2024,11,"Elettricità/Gas",250.0],[2024,11,"Spesa",700.0],[2024,11,"Varie",300.0],[2024,11,"Svago",400.0],[2024,11,"ETE/ETU",300.0],[2024,12,"Casa",650.0],[2024,12,"Trasporti",150.0],[2024,12,"TARI",22.17],[2024,12,"Elettricità/Gas",250.0],[2024,12,"Spesa",700.0],[2024,12,"Varie",300.0],[2024,12,"Svago",400.0],[2024,12,"ETE/ETU",300.0],[2025,1,"Casa",650.0],[2025,1,"Trasporti",150.0],[2025,1,"TARI",22.17],[2025,1,"Elettricità/Gas",250.0],[2025,1,"Spesa",700.0],[2025,1,"Varie",300.0],[2025,1,"Svago",400.0],[2025,1,"ETE/ETU",300.0],[2025,2,"Casa",650.0],[2025,2,"Trasporti",150.0],[2025,2,"TARI",22.17],[2025,2,"Elettricità/Gas",250.0],[2025,2,"Spesa",700.0],[2025,2,"Varie",300.0],[2025,2,"Svago",400.0],[2025,2,"ETE/ETU",300.0],[2025,3,"Casa",650.0],[2025,3,"Trasporti",150.0],[2025,3,"TARI",22.17],[2025,3,"Elettricità/Gas",250.0],[2025,3,"Spesa",700.0],[2025,3,"Varie",300.0],[2025,3,"Svago",400.0],[2025,3,"ETE/ETU",300.0],[2025,4,"Casa",650.0],[2025,4,"Trasporti",150.0],[2025,4,"TARI",22.17],[2025,4,"Elettricità/Gas",250.0],[2025,4,"Spesa",700.0],[2025,4,"Varie",300.0],[2025,4,"Svago",400.0],[2025,4,"ETE/ETU",300.0],[2025,5,"Casa",650.0],[2025,5,"Trasporti",150.0],[2025,5,"TARI",22.17],[2025,5,"Elettricità/Gas",250.0],[2025,5,"Spesa",700.0],[2025,5,"Varie",300.0],[2025,5,"Svago",400.0],[2025,5,"ETE/ETU",300.0],[2025,6,"Casa",650.0],[2025,6,"Trasporti",150.0],[2025,6,"TARI",22.17],[2025,6,"Elettricità/Gas",250.0],[2025,6,"Spesa",700.0],[2025,6,"Varie",300.0],[2025,6,"Svago",400.0],[2025,6,"ETE/ETU",300.0],[2025,7,"Casa",650.0],[2025,7,"Trasporti",150.0],[2025,7,"TARI",22.17],[2025,7,"Elettricità/Gas",250.0],[2025,7,"Spesa",700.0],[2025,7,"Varie",300.0],[2025,7,"Svago",400.0],[2025,7,"ETE/ETU",300.0],[2025,8,"Casa",650.0],[2025,8,"Trasporti",150.0],[2025,8,"TARI",22.17],[2025,8,"Elettricità/Gas",250.0],[2025,8,"Spesa",700.0],[2025,8,"Varie",300.0],[2025,8,"Svago",400.0],[2025,8,"ETE/ETU",300.0],[2025,9,"Casa",650.0],[2025,9,"Trasporti",150.0],[2025,9,"TARI",22.17],[2025,9,"Elettricità/Gas",250.0],[2025,9,"Spesa",700.0],[2025,9,"Varie",300.0],[2025,9,"Svago",400.0],[2025,9,"ETE/ETU",300.0],[2025,10,"Casa",650.0],[2025,10,"Trasporti",150.0],[2025,10,"TARI",22.17],[2025,10,"Elettricità/Gas",250.0],[2025,10,"Spesa",700.0],[2025,10,"Varie",300.0],[2025,10,"Svago",400.0],[2025,10,"ETE/ETU",300.0],[2025,11,"Casa",650.0],[2025,11,"Trasporti",150.0],[2025,11,"TARI",22.17],[2025,11,"Elettricità/Gas",250.0],[2025,11,"Spesa",700.0],[2025,11,"Varie",300.0],[2025,11,"Svago",400.0],[2025,11,"ETE/ETU",300.0],[2025,12,"Casa",650.0],[2025,12,"Trasporti",150.0],[2025,12,"TARI",22.17],[2025,12,"Elettricità/Gas",250.0],[2025,12,"Spesa",700.0],[2025,12,"Varie",300.0],[2025,12,"Svago",400.0],[2025,12,"ETE/ETU",300.0],[2026,1,"Casa",650.0],[2026,1,"Trasporti",150.0],[2026,1,"TARI",22.17],[2026,1,"Elettricità/Gas",250.0],[2026,1,"Spesa",700.0],[2026,1,"Varie",300.0],[2026,1,"Svago",400.0],[2026,1,"ETE/ETU",300.0],[2026,2,"Casa",650.0],[2026,2,"Trasporti",150.0],[2026,2,"TARI",22.17],[2026,2,"Elettricità/Gas",250.0],[2026,2,"Spesa",700.0],[2026,2,"Varie",300.0],[2026,2,"Svago",400.0],[2026,2,"ETE/ETU",300.0],[2026,3,"Casa",650.0],[2026,3,"Trasporti",150.0],[2026,3,"TARI",22.17],[2026,3,"Elettricità/Gas",250.0],[2026,3,"Spesa",700.0],[2026,3,"Varie",300.0],[2026,3,"Svago",400.0],[2026,3,"ETE/ETU",300.0],[2026,4,"Casa",650.0],[2026,4,"Trasporti",150.0],[2026,4,"TARI",22.17],[2026,4,"Elettricità/Gas",250.0],[2026,4,"Spesa",700.0],[2026,4,"Varie",300.0],[2026,4,"Svago",400.0],[2026,4,"ETE/ETU",300.0],[2026,5,"Casa",650.0],[2026,5,"Trasporti",150.0],[2026,5,"TARI",22.17],[2026,5,"Elettricità/Gas",250.0],[2026,5,"Spesa",700.0],[2026,5,"Varie",300.0],[2026,5,"Svago",400.0],[2026,5,"ETE/ETU",300.0],[2026,6,"Casa",650.0],[2026,6,"Trasporti",150.0],[2026,6,"TARI",22.17],[2026,6,"Elettricità/Gas",250.0],[2026,6,"Spesa",700.0],[2026,6,"Varie",300.0],[2026,6,"Svago",400.0],[2026,6,"ETE/ETU",300.0],[2026,7,"Casa",650.0],[2026,7,"Trasporti",150.0],[2026,7,"TARI",22.17],[2026,7,"Elettricità/Gas",250.0],[2026,7,"Spesa",700.0],[2026,7,"Varie",300.0],[2026,7,"Svago",400.0],[2026,7,"ETE/ETU",300.0]];
+const TX_SEED = []; // Dati reali rimossi dal sorgente pubblico: caricati solo da Firestore autenticato.
+const BG_SEED = []; // Budget reali rimossi dal sorgente pubblico: caricati solo da Firestore autenticato.
 const firebaseConfig = {
   apiKey: "AIzaSyAC-riYWdx1PjM2WtKK9IATvNRH6o-xzqI",
   authDomain: "bilancio-lacavagiroletti.firebaseapp.com",
@@ -153,17 +175,20 @@ const firebaseConfig = {
   messagingSenderId: "715097891255",
   appId: "1:715097891255:web:8b5217dd48832dadda8832"
 };
-let db = null, sharedDocRef = null, movimentiColRef = null, cloudReady = false;
+let db = null, auth = null, sharedDocRef = null, movimentiColRef = null, cloudReady = false;
 try {
   if (typeof firebase !== "undefined") {
     firebase.initializeApp(firebaseConfig);
+    auth = firebase.auth();
     db = firebase.firestore();
     sharedDocRef = db.collection("bilancio_familiare").doc("shared_data");
     // Ogni movimento è un documento a sé in questa collezione, non più una riga
     // dentro un array unico: cancellare/modificare un movimento tocca SOLO il suo
     // documento, mai gli altri — elimina alla radice i conflitti da sincronizzazione.
     movimentiColRef = db.collection("bilancio_familiare_movimenti");
-    cloudReady = true;
+    // Diventa true solo dopo Firebase Authentication: in questo modo nessuna
+    // lettura/scrittura parte prima che le Security Rules possano identificarci.
+    cloudReady = false;
   }
 } catch(e) { console.error("Firebase non inizializzato", e); }
 
@@ -359,15 +384,50 @@ let state = {
   mostraDettaglioMutuo: false,
   pendingDeleteId: null,
   ricorrenti: [],
-  speseTrimestrali: []
+  speseTrimestrali: [],
+  cestino: [],
+  auditLog: []
 };
+
+const APP_VERSION = "2.1-sicurezza";
+const CESTINO_GIORNI = 30;
+let modalitaPrudente=false;
+function operazioneDistruttivaConsentita(){
+  if(!modalitaPrudente) return true;
+  alert("Modalità prudente attiva: i conteggi locale/cloud non coincidono. Attendi la sincronizzazione e ricontrolla da Admin prima di cancellare o ripristinare dati.");
+  return false;
+}
+function salvaMetaSicurezza(){
+  localStorage.setItem("bilancio_cestino", JSON.stringify(state.cestino));
+  localStorage.setItem("bilancio_audit_log", JSON.stringify(state.auditLog));
+  scheduleCloudSync();
+}
+function registraAudit(azione, dettaglio){
+  state.auditLog.unshift({id:uid(), ts:Date.now(), azione, dettaglio:String(dettaglio||"")});
+  state.auditLog = state.auditLog.slice(0,500);
+  salvaMetaSicurezza();
+}
+function pulisciCestinoScaduto(){
+  const soglia=Date.now()-CESTINO_GIORNI*86400000;
+  state.cestino=state.cestino.filter(x=>(x.deletedAt||0)>=soglia).slice(0,300);
+}
+function statoMovimento(t){
+  if (t.stato==="riconciliato") return "riconciliato";
+  const oggi=new Date(), futuro=t.anno>oggi.getFullYear() || (t.anno===oggi.getFullYear() && t.mese>oggi.getMonth()+1);
+  return futuro ? "previsto" : "registrato";
+}
+function etichettaStato(t){
+  const s=statoMovimento(t), colore=s==="riconciliato"?GREEN:(s==="previsto"?GOLD:MUTED);
+  return `<span style="font-size:10px;color:${colore};border:1px solid ${colore};border-radius:9px;padding:1px 5px;margin-left:5px">${s}</span>`;
+}
 
 function catConEntrate(){ return ["Entrate", ...state.categorie]; }
 
 function loadState(){
   try {
     const tx = localStorage.getItem("bilancio_transazioni");
-    state.transazioni = tx ? JSON.parse(tx) : TX_SEED.map((t,i) => ({id: "seed-"+i, anno:t[0], mese:t[1], categoria:t[2], descrizione:t[3], importo:t[4]}));
+    const azzeratoVolontariamente = localStorage.getItem("bilancio_dati_azzerati") === "1";
+    state.transazioni = tx ? JSON.parse(tx) : (azzeratoVolontariamente ? [] : TX_SEED.map((t,i) => ({id: "seed-"+i, anno:t[0], mese:t[1], categoria:t[2], descrizione:t[3], importo:t[4]})));
     if (!tx) localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
   } catch(e){ state.transazioni = TX_SEED.map((t,i) => ({id: "seed-"+i, anno:t[0], mese:t[1], categoria:t[2], descrizione:t[3], importo:t[4]})); }
 
@@ -395,7 +455,7 @@ function loadState(){
       BG_SEED.forEach(([anno,mese,cat,prev]) => { agg[anno]=agg[anno]||{}; agg[anno][cat]=(agg[anno][cat]||0)+prev; });
       const years = Object.keys(agg).map(Number).sort((a,b)=>a-b);
       const lastY = years[years.length-1];
-      agg[lastY+1] = {...agg[lastY]}; agg[lastY+2] = {...agg[lastY]};
+      if(lastY){ agg[lastY+1] = {...agg[lastY]}; agg[lastY+2] = {...agg[lastY]}; }
       state.budgetAnnuale = agg;
       localStorage.setItem("bilancio_budget_annuale", JSON.stringify(agg));
     }
@@ -413,7 +473,7 @@ function loadState(){
 
   try {
     const st = localStorage.getItem("bilancio_spese_trimestrali");
-    state.speseTrimestrali = st ? JSON.parse(st) : [{id: uid(), descrizioneMatch: "mutuo", prossimaRataAnno: 2026, prossimaRataMese: 10}];
+    state.speseTrimestrali = normalizzaSpeseTrimestrali(st ? JSON.parse(st) : [{id: "trimestrale-mutuo-default", descrizioneMatch: "mutuo", prossimaRataAnno: 2026, prossimaRataMese: 10}]);
     if (!st) localStorage.setItem("bilancio_spese_trimestrali", JSON.stringify(state.speseTrimestrali));
   } catch(e){ state.speseTrimestrali = []; }
 
@@ -427,6 +487,9 @@ function loadState(){
     state.stipendi = sp ? JSON.parse(sp) : defaultStipendiConfig();
     if (!sp) localStorage.setItem("bilancio_stipendi", JSON.stringify(state.stipendi));
   } catch(e){ state.stipendi = defaultStipendiConfig(); }
+  try { state.cestino = JSON.parse(localStorage.getItem("bilancio_cestino")||"[]"); } catch(e){ state.cestino=[]; }
+  try { state.auditLog = JSON.parse(localStorage.getItem("bilancio_audit_log")||"[]"); } catch(e){ state.auditLog=[]; }
+  pulisciCestinoScaduto();
   migraStipendiRpd();
 
   const oggi = new Date();
@@ -446,6 +509,33 @@ function saveRicorrenti(){ localStorage.setItem("bilancio_ricorrenti", JSON.stri
 function saveSpeseTrimestrali(){ localStorage.setItem("bilancio_spese_trimestrali", JSON.stringify(state.speseTrimestrali)); scheduleCloudSync(); }
 function saveRisparmioReset(){ localStorage.setItem("bilancio_risparmio_reset", JSON.stringify(state.risparmioReset)); scheduleCloudSync(); }
 function saveStipendi(){ localStorage.setItem("bilancio_stipendi", JSON.stringify(state.stipendi)); scheduleCloudSync(); }
+
+// Coda locale delle modifiche ai movimenti non ancora confermate dal server.
+// È indispensabile per non perdere inserimenti fatti offline quando, anche dopo
+// ore o giorni, arriva il primo snapshot completo da Firestore.
+const PENDING_MOVIMENTI_KEY = "bilancio_pending_movimenti_v1";
+function leggiPendingMovimenti(){
+  try {
+    const p = JSON.parse(localStorage.getItem(PENDING_MOVIMENTI_KEY) || "{}");
+    return {set: p.set || {}, del: p.del || {}};
+  } catch(e){ return {set:{}, del:{}}; }
+}
+function salvaPendingMovimenti(p){
+  if (Object.keys(p.set).length===0 && Object.keys(p.del).length===0) localStorage.removeItem(PENDING_MOVIMENTI_KEY);
+  else localStorage.setItem(PENDING_MOVIMENTI_KEY, JSON.stringify(p));
+}
+function segnaPendingSet(t){
+  const p = leggiPendingMovimenti();
+  p.set[t.id] = t; delete p.del[t.id]; salvaPendingMovimenti(p);
+}
+function segnaPendingDelete(id){
+  const p = leggiPendingMovimenti();
+  p.del[id] = true; delete p.set[id]; salvaPendingMovimenti(p);
+}
+function confermaPending(id, tipo){
+  const p = leggiPendingMovimenti();
+  delete p[tipo][id]; salvaPendingMovimenti(p);
+}
 
 // ============================================================
 // RICORRENTI: genera automaticamente i movimenti mancanti per ogni
@@ -519,7 +609,9 @@ function getYears(){
 function aggiustamentoTrimestraleUscite(anno, mese){
   if (!state.speseTrimestrali || state.speseTrimestrali.length === 0) return 0;
   let delta = 0;
-  state.speseTrimestrali.forEach(cfg => {
+  // Protezione ulteriore: anche se un vecchio dispositivo ha appena rimesso
+  // online copie della stessa configurazione, il calcolo la considera una volta sola.
+  normalizzaSpeseTrimestrali(state.speseTrimestrali).forEach(cfg => {
     const match = (cfg.descrizioneMatch || "").toLowerCase();
     if (!match) return;
     const registrato = state.transazioni
@@ -857,7 +949,7 @@ function renderMeseView(){
     return `<div class="tx-item ${isE?'entrata':'uscita'}" ${infoTitle?`title="${escapeHtml(infoTitle)}"`:''}>
       <div style="min-width:0">
         <div class="tx-desc">${t.giorno?`<span style="color:${NAVY};font-weight:600">${String(t.giorno).padStart(2,'0')}</span> `:''}${t.ricorrenteGruppo?'&#128257; ':''}${escapeHtml(t.descrizione)}${t.allegatoId?` <a href="#" data-open-allegato="${t.allegatoId}" title="${escapeHtml(t.allegatoNome||'Allegato')}" style="text-decoration:none">&#128206;</a>`:''}</div>
-        <div class="tx-cat">${escapeHtml(t.categoria)}${showDateBadge?' · '+MESI[t.mese-1].slice(0,3)+' '+t.anno:''}</div>
+        <div class="tx-cat">${escapeHtml(t.categoria)}${etichettaStato(t)}${showDateBadge?' · '+MESI[t.mese-1].slice(0,3)+' '+t.anno:''}</div>
         ${dataInserimentoBreve ? `<div style="font-size:11px;color:#8A8072;margin-top:2px">Registrato il ${dataInserimentoBreve}</div>` : ''}
       </div>
       <div style="display:flex;align-items:center;gap:6px">
@@ -1345,19 +1437,22 @@ function calcolaRecuperoDetrazioni(anno, cfg, capienzaP1, capienzaP2){
   let residuoP1 = capienzaP1, residuoP2 = capienzaP2;
   const dettaglio = voci.map(v => {
     let capienzaDisp;
+    let recuperatoPersona1 = 0, recuperatoPersona2 = 0;
     if (v.applicaA === "persona1") capienzaDisp = residuoP1;
     else if (v.applicaA === "persona2") capienzaDisp = residuoP2;
     else capienzaDisp = residuoP1 + residuoP2;
     const recuperato = Math.min(v.quota, Math.max(0, capienzaDisp));
     const perso = v.quota - recuperato;
-    if (v.applicaA === "persona1") residuoP1 -= recuperato;
-    else if (v.applicaA === "persona2") residuoP2 -= recuperato;
+    if (v.applicaA === "persona1") { residuoP1 -= recuperato; recuperatoPersona1 = recuperato; }
+    else if (v.applicaA === "persona2") { residuoP2 -= recuperato; recuperatoPersona2 = recuperato; }
     else {
       const daP1 = Math.min(residuoP1, recuperato);
       residuoP1 -= daP1;
-      residuoP2 -= (recuperato - daP1);
+      const daP2 = recuperato - daP1;
+      residuoP2 -= daP2;
+      recuperatoPersona1 = daP1; recuperatoPersona2 = daP2;
     }
-    return {...v, recuperato, perso};
+    return {...v, recuperato, perso, recuperatoPersona1, recuperatoPersona2};
   });
   const totaleRecuperato = dettaglio.reduce((s,d)=>s+d.recuperato,0);
   const totalePerso = dettaglio.reduce((s,d)=>s+d.perso,0);
@@ -1365,12 +1460,11 @@ function calcolaRecuperoDetrazioni(anno, cfg, capienzaP1, capienzaP2){
   return {dettaglio, totaleRecuperato, totalePerso, totaleQuota, attiva: dettaglio.length>0};
 }
 
-// Quota del recupero detrazioni attribuibile a una persona (se "entrambi", 50/50).
+// Quota del recupero attribuibile a una persona, rispettando la capienza realmente
+// consumata dal calcolo precedente (non una ripartizione fittizia 50/50).
 function recuperoPerPersona(dettaglio, personaKey){
   return dettaglio.reduce((s,d) => {
-    if (d.applicaA === personaKey) return s + d.recuperato;
-    if (d.applicaA === "entrambi") return s + d.recuperato/2;
-    return s;
+    return s + (personaKey === "persona1" ? (d.recuperatoPersona1 || 0) : (d.recuperatoPersona2 || 0));
   }, 0);
 }
 
@@ -1533,7 +1627,12 @@ function renderBudgetView(){
 }
 
 function renderSaldoView(){
-  const data = getMonthlySummary();
+  const oggi = new Date();
+  const oggiAnno = oggi.getFullYear(), oggiMese = oggi.getMonth()+1;
+  // La riconciliazione confronta il saldo bancario reale con i movimenti: i mesi
+  // futuri, pur già popolati da ricorrenze per finalità previsionali, qui non hanno
+  // ancora un saldo reale e rendevano la tabella fuorviante.
+  const data = getMonthlySummary().filter(m => m.anno < oggiAnno || (m.anno===oggiAnno && m.mese<=oggiMese));
   const rows = data.slice(-15).reverse();
   const sortedKeys = Object.keys(state.saldoConto).filter(k => state.saldoConto[k] && state.saldoConto[k].saldo!=null).sort();
 
@@ -1881,7 +1980,7 @@ function renderUpdateImportoModal(gid){
         <p class="sub" style="margin:0">"${escapeHtml(open.descrizione)}" — importo attuale: ${eur(open.importo)}</p>
         <input type="text" inputmode="decimal" id="uImporto" placeholder="Nuovo importo &euro; (es. 50,00)">
         <div class="form-row">
-          <select id="uMese">${MESI.map((m,i)=>`<option value="${i+1}">${m}</option>`).join('')}</select>
+          <select id="uMese">${MESI.map((m,i)=>`<option value="${i+1}" ${state.selMonth===i+1?'selected':''}>${m}</option>`).join('')}</select>
           <input type="number" id="uAnno" value="${state.selYear}" style="width:90px">
         </div>
         <p class="sub" style="margin:0">Il nuovo importo vale da questo mese in poi. I mesi precedenti già registrati restano invariati.</p>
@@ -1916,8 +2015,40 @@ function renderAdminView(){
   const usageCounts = {};
   state.transazioni.forEach(t => { usageCounts[t.categoria] = (usageCounts[t.categoria]||0)+1; });
   const hasPassword = !!localStorage.getItem("bilancio_password_hash");
+  const pending=leggiPendingMovimenti(), pendingCount=Object.keys(pending.set).length+Object.keys(pending.del).length;
+  const normalizza=s=>String(s||"").toLowerCase().trim().replace(/\s+/g," ");
+  const gruppiVarie={};
+  state.transazioni.filter(t=>t.categoria==="Varie").forEach(t=>{ const k=normalizza(t.descrizione); if(k.length>=4){ if(!gruppiVarie[k]) gruppiVarie[k]={nome:t.descrizione.trim(),n:0}; gruppiVarie[k].n++; }});
+  const suggerimentiVarie=Object.entries(gruppiVarie).filter(([,v])=>v.n>=3).sort((a,b)=>b[1].n-a[1].n).slice(0,8);
 
   return `
+  <div class="card" style="margin-bottom:20px">
+    <div class="card-title-row"><h3 style="margin-bottom:0">Stato e sicurezza</h3><span class="sub">versione ${APP_VERSION}</span></div>
+    <div class="summary-grid" style="margin:12px 0">
+      <div><b>${state.transazioni.length}</b><div class="sub">movimenti locali</div></div>
+      <div><b style="color:${pendingCount?RUST:GREEN}">${pendingCount}</b><div class="sub">modifiche in attesa</div></div>
+      <div><b>${state.cestino.length}</b><div class="sub">nel cestino</div></div>
+    </div>
+    <p class="sub" style="margin:0">Ultima sincronizzazione riuscita: <b>${fmtDataOra(Number(localStorage.getItem("bilancio_ultima_sync_ok")))||"non ancora verificata"}</b>. Le operazioni di ripristino richiedono il cloud e creano prima uno snapshot di sicurezza.</p>
+    <div id="cloudIntegrityStatus" class="sub" style="margin-top:8px">Controllo coerenza cloud...</div>
+    <button class="range-btn" id="selfTestBtn" style="margin-top:10px">Esegui controlli interni</button><span id="selfTestResult" class="sub" style="margin-left:8px"></span>
+  </div>
+
+  <div class="card" style="margin-bottom:20px">
+    <h3>Cestino e registro attività</h3>
+    <p class="sub" style="margin-top:-8px">I movimenti eliminati restano recuperabili per ${CESTINO_GIORNI} giorni.</p>
+    ${state.cestino.slice(0,10).map(x=>`<div class="admin-cat-row"><span style="flex:1;font-size:13px"><b>${escapeHtml(x.descrizione)}</b> — ${eur(x.importo)} · ${fmtDataOra(x.deletedAt)}</span><button class="range-btn" data-restore-trash="${x.id}">Ripristina</button></div>`).join('') || '<p class="empty">Cestino vuoto.</p>'}
+    <details style="margin-top:12px"><summary style="cursor:pointer;font-weight:600">Ultime attività</summary>
+      ${state.auditLog.slice(0,50).map(x=>`<div style="font-size:12px;border-bottom:1px solid var(--border);padding:6px 0"><b>${escapeHtml(x.azione)}</b> · ${escapeHtml(x.dettaglio)} <span class="sub">${fmtDataOra(x.ts)}</span></div>`).join('') || '<p class="empty">Nessuna attività registrata.</p>'}
+    </details>
+  </div>
+
+  <div class="card" style="margin-bottom:20px">
+    <h3>Suggerimenti per “Varie”</h3>
+    <p class="sub" style="margin-top:-8px">Propongo una categoria solo quando la stessa descrizione compare almeno 3 volte. Nulla viene modificato automaticamente.</p>
+    ${suggerimentiVarie.map(([k,v])=>`<div class="admin-cat-row"><span style="flex:1;font-size:13px"><b>${escapeHtml(v.nome)}</b> — ${v.n} movimenti</span><button class="range-btn" data-varie-key="${escapeHtml(k)}" data-varie-name="${escapeHtml(v.nome)}">Crea categoria e riclassifica</button></div>`).join('') || '<p class="empty">Nessun gruppo abbastanza ricorrente da suggerire.</p>'}
+  </div>
+
   <div class="card" style="margin-bottom:20px">
     <h3>Gestione categorie</h3>
     <p class="sub" style="margin-top:-8px;margin-bottom:14px">Rinomina, elimina o aggiungi categorie. La spunta "Budget" decide se compare nella scheda Budget annuale.</p>
@@ -2331,6 +2462,7 @@ function attachHandlers(){
       b.onclick = () => {
         const id = b.dataset.del;
         if (state.pendingDeleteId === id) {
+          if(!operazioneDistruttivaConsentita()) return;
           clearTimeout(window._timeoutConfermaCancellazione);
           const t = state.transazioni.find(x => x.id === id);
           if (t && t.ricorrenteGruppo) {
@@ -2342,6 +2474,11 @@ function attachHandlers(){
             }
           }
           state.pendingDeleteId = null;
+          if (t) {
+            state.cestino.unshift({...t, deletedAt:Date.now()});
+            pulisciCestinoScaduto();
+            registraAudit("Movimento eliminato", `${t.descrizione} — ${eur(t.importo)}`);
+          }
           cancellaMovimento(id);
           render();
           return;
@@ -2441,6 +2578,7 @@ function attachHandlers(){
         }
 
         salvaMovimento(target);
+        registraAudit(editId?"Movimento modificato":"Movimento aggiunto", `${descrizione} — ${eur(importo)}`);
         document.getElementById("modalRoot").innerHTML = "";
         render();
       };
@@ -2494,6 +2632,14 @@ function attachHandlers(){
         const key = inp.dataset.key;
         const val = parseImporto(e.target.value);
         state.saldoConto[key] = {...(state.saldoConto[key]||{}), saldo: isNaN(val)?null:val};
+        const [anno,mese]=key.split("-").map(Number), modificati=[];
+        state.transazioni.forEach(t => {
+          if (t.anno===anno && t.mese===mese) {
+            t.stato=isNaN(val)?null:"riconciliato"; t.updatedAt=Date.now(); modificati.push(t);
+          }
+        });
+        salvaMovimentiBulk(modificati, []);
+        registraAudit(isNaN(val)?"Riconciliazione rimossa":"Mese riconciliato", `${MESI[mese-1]} ${anno}`);
         saveSaldo(); render();
       };
     });
@@ -2540,6 +2686,7 @@ function attachHandlers(){
         if (!importo || isNaN(importo)) { alert("Inserisci un importo valido (es. 50,00)."); return; }
         const gruppoId = uid();
         state.ricorrenti.push({id:uid(), gruppoId, categoria, descrizione, importo, dalAnno:anno, dalMese:mese, alAnno:null, alMese:null});
+        registraAudit("Ricorrenza creata", `${descrizione} — ${eur(importo)}`);
         saveRicorrenti();
         generaMovimentiRicorrenti();
         document.getElementById("ricorrentiModalRoot").innerHTML = "";
@@ -2572,7 +2719,8 @@ function attachHandlers(){
         if (!meseTxt) return;
         const m = meseTxt.match(/^(\d{1,2})\D+(\d{4})$/);
         if (!m) { alert("Formato non valido. Usa MM/AAAA."); return; }
-        interrompiRicorrente(gid, Number(m[2]), Number(m[1]));
+        const [ultimoAnno, ultimoMese] = prevMonth(Number(m[2]), Number(m[1]));
+        interrompiRicorrente(gid, ultimoAnno, ultimoMese);
         render();
       };
     });
@@ -2589,6 +2737,22 @@ function attachHandlers(){
   }
 
   if (state.tab === "admin") {
+    aggiornaControlloIntegritaCloud();
+    const selfTestBtn=document.getElementById("selfTestBtn"); if(selfTestBtn) selfTestBtn.onclick=async()=>{const r=await eseguiAutotest();document.getElementById("selfTestResult").innerHTML=r.ok?`<span style="color:${GREEN}">✓ ${r.totale} controlli superati</span>`:`<span style="color:${RUST}">✗ ${escapeHtml(r.errori.join("; "))}</span>`;};
+    document.querySelectorAll("[data-restore-trash]").forEach(b=>b.onclick=()=>{
+      const x=state.cestino.find(t=>t.id===b.dataset.restoreTrash); if(!x) return;
+      const t={...x}; delete t.deletedAt; t.updatedAt=Date.now();
+      if(t.ricorrenteGruppo){ const r=state.ricorrenti.find(q=>q.gruppoId===t.ricorrenteGruppo); if(r&&r.mesiSaltati) r.mesiSaltati=r.mesiSaltati.filter(s=>!(s.anno===t.anno&&s.mese===t.mese)); saveRicorrenti(); }
+      state.cestino=state.cestino.filter(q=>q!==x); salvaMovimento(t);
+      registraAudit("Movimento ripristinato", `${t.descrizione} — ${eur(t.importo)}`); render();
+    });
+    document.querySelectorAll("[data-varie-key]").forEach(b=>b.onclick=()=>{
+      const nome=b.dataset.varieName.trim(), key=b.dataset.varieKey;
+      if(!confirm(`Creare la categoria "${nome}" e spostarvi tutti i movimenti corrispondenti da “Varie”?`)) return;
+      if(!state.categorie.includes(nome)) state.categorie.push(nome);
+      const modificati=[]; state.transazioni.forEach(t=>{ if(t.categoria==="Varie"&&t.descrizione.toLowerCase().trim().replace(/\s+/g," ")===key){t.categoria=nome;t.updatedAt=Date.now();modificati.push(t);} });
+      saveCategorie(); salvaMovimentiBulk(modificati,[]); registraAudit("Categoria suggerita creata", `${nome}: ${modificati.length} movimenti`); render();
+    });
     const creaSnapBtn = document.getElementById("creaSnapshotBtn");
     if (creaSnapBtn) creaSnapBtn.onclick = async () => { await creaSnapshotManuale(); populateSnapshotList(); };
     populateSnapshotList();
@@ -2684,6 +2848,7 @@ function attachHandlers(){
         } else {
           state.speseTrimestrali.push({id: uid(), descrizioneMatch, prossimaRataMese, prossimaRataAnno});
         }
+        state.speseTrimestrali = normalizzaSpeseTrimestrali(state.speseTrimestrali);
         saveSpeseTrimestrali();
         document.getElementById("trimModalRoot").innerHTML = "";
         render();
@@ -2814,33 +2979,27 @@ function attachHandlers(){
     if (importFile) importFile.onchange = importBackup;
     const resetBtn = document.getElementById("resetAllBtn");
     if (resetBtn) resetBtn.onclick = async () => {
+      if(!operazioneDistruttivaConsentita()) return;
       if (!confirm("Sei sicuro? Questa azione cancella TUTTI i dati (anche sul cloud, per tutti i dispositivi) e non può essere annullata.")) return;
       if (!confirm("Ultima conferma: cancellare davvero tutto?")) return;
-      if (movimentiColRef) {
-        try {
-          const tutti = await movimentiColRef.get();
-          const ids = tutti.docs.map(d => d.id);
-          for (let i=0; i<ids.length; i+=450){
-            const batch = db.batch();
-            ids.slice(i,i+450).forEach(id => batch.delete(movimentiColRef.doc(id)));
-            await batch.commit();
-          }
-        } catch(e) { console.error("Errore cancellazione movimenti dal cloud", e); }
-      }
-      localStorage.removeItem("bilancio_transazioni");
-      localStorage.removeItem("bilancio_budget_annuale");
-      localStorage.removeItem("bilancio_saldo_conto");
-      localStorage.removeItem("bilancio_categorie");
-      localStorage.removeItem("bilancio_categorie_budget");
-      localStorage.removeItem("bilancio_voci_entrata");
-      localStorage.removeItem("bilancio_ricorrenti");
-      localStorage.removeItem("bilancio_spese_trimestrali");
-      localStorage.removeItem("bilancio_risparmio_reset");
-      localStorage.removeItem("bilancio_stipendi");
-      localStorage.removeItem("bilancio_ultimo_backup_mensile");
-      localStorage.removeItem("bilancio_ultimo_backup_giornaliero");
-      localStorage.removeItem("bilancio_migrazione_movimenti_v2");
-      location.reload();
+      try {
+        if (!cloudReady) throw new Error("cloud non disponibile: cancellazione annullata");
+        await creaSnapshotPreRipristino();
+        await sostituisciMovimentiCloud([]);
+        const vuoto = {
+          transazioni: [], budgetAnnuale: {}, saldoConto: {},
+          categorie: [...DEFAULT_CATEGORIE], categorieBudget: [...DEFAULT_CATEGORIE_BUDGET],
+          vociEntrata: [...DEFAULT_VOCI_ENTRATA], ricorrenti: [], speseTrimestrali: [],
+          risparmioReset: null, stipendi: defaultStipendiConfig()
+        };
+        applicaBackupEsatto(vuoto);
+        localStorage.setItem("bilancio_dati_azzerati", "1");
+        await pushToCloud();
+        localStorage.removeItem("bilancio_ultimo_backup_mensile");
+        localStorage.removeItem("bilancio_ultimo_backup_giornaliero");
+        alert("Tutti i dati sono stati cancellati. È stato conservato uno snapshot di sicurezza precedente all'operazione.");
+        render();
+      } catch(e){ alert("Cancellazione annullata: " + e.message); }
     };
 
 
@@ -2892,6 +3051,7 @@ function renameCategoria(oldName, newName){
   if (state.filterCat === oldName) state.filterCat = newName;
   saveCategorie(); saveCategorieBudget(); saveBudget();
   salvaMovimentiBulk(modificati, []);
+  registraAudit("Categoria rinominata", `${oldName} → ${newName} (${modificati.length} movimenti)`);
   render();
 }
 
@@ -3040,13 +3200,14 @@ function esportaCSV(year){
   a.click(); URL.revokeObjectURL(url);
 }
 
-function exportBackup(){
-  const backup = {
-    transazioni: state.transazioni, budgetAnnuale: state.budgetAnnuale, saldoConto: state.saldoConto,
-    categorie: state.categorie, categorieBudget: state.categorieBudget, vociEntrata: state.vociEntrata,
-    ricorrenti: state.ricorrenti, speseTrimestrali: state.speseTrimestrali, risparmioReset: state.risparmioReset, stipendi: state.stipendi,
-    exportedAt: new Date().toISOString()
-  };
+function contenutoBackup(data){
+  const x={}; ["transazioni","budgetAnnuale","saldoConto","categorie","categorieBudget","vociEntrata","ricorrenti","speseTrimestrali","risparmioReset","stipendi","cestino","auditLog"].forEach(k=>x[k]=data[k]===undefined?null:data[k]);
+  return x;
+}
+async function checksumBackup(data){ return sha256(JSON.stringify(contenutoBackup(data))); }
+async function exportBackup(){
+  const backup = {...statoCompleto(), exportedAt:new Date().toISOString(), versione:APP_VERSION};
+  backup.checksum=await checksumBackup(backup);
   const blob = new Blob([JSON.stringify(backup, null, 2)], {type:"application/json"});
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -3054,30 +3215,94 @@ function exportBackup(){
   a.click(); URL.revokeObjectURL(url);
 }
 
+function backupValido(data){
+  if (!data || typeof data !== "object" || !Array.isArray(data.transazioni)) return false;
+  return data.transazioni.every(t => t && typeof t.id==="string" && Number.isFinite(Number(t.anno)) && Number.isFinite(Number(t.mese)) && typeof t.categoria==="string" && typeof t.descrizione==="string" && Number.isFinite(Number(t.importo)));
+}
+
+let sostituzioneMovimentiInCorso = false;
+async function sostituisciMovimentiCloud(nuovi){
+  if (!movimentiColRef || !db) throw new Error("Cloud non disponibile: ripristino annullato senza modificare i dati.");
+  sostituzioneMovimentiInCorso = true;
+  try {
+    const tutti = await movimentiColRef.get();
+    const nuoviPerId = new Map(nuovi.map(t => [t.id, t]));
+    const operazioni = [];
+    tutti.docs.forEach(d => { if (!nuoviPerId.has(d.id)) operazioni.push({tipo:"del", id:d.id}); });
+    nuovi.forEach(t => operazioni.push({tipo:"set", t}));
+    for (let i=0; i<operazioni.length; i+=450){
+      const batch = db.batch();
+      operazioni.slice(i,i+450).forEach(op => {
+        if (op.tipo==="set") batch.set(movimentiColRef.doc(op.t.id), op.t);
+        else batch.delete(movimentiColRef.doc(op.id));
+      });
+      await batch.commit();
+    }
+    localStorage.removeItem(PENDING_MOVIMENTI_KEY);
+  } finally {
+    sostituzioneMovimentiInCorso = false;
+  }
+}
+
+function applicaBackupEsatto(data){
+  applyingRemoteUpdate = true;
+  state.transazioni = data.transazioni.map(t => ({...t, anno:Number(t.anno), mese:Number(t.mese), importo:Number(t.importo)}));
+  state.budgetAnnuale = data.budgetAnnuale || {};
+  state.saldoConto = data.saldoConto || {};
+  state.categorie = Array.isArray(data.categorie) ? data.categorie : [...DEFAULT_CATEGORIE];
+  state.categorieBudget = Array.isArray(data.categorieBudget) ? data.categorieBudget : [...DEFAULT_CATEGORIE_BUDGET];
+  state.vociEntrata = Array.isArray(data.vociEntrata) ? data.vociEntrata : [...DEFAULT_VOCI_ENTRATA];
+  state.ricorrenti = Array.isArray(data.ricorrenti) ? data.ricorrenti : [];
+  state.speseTrimestrali = normalizzaSpeseTrimestrali(data.speseTrimestrali || []);
+  state.risparmioReset = data.risparmioReset || null;
+  state.stipendi = data.stipendi || defaultStipendiConfig();
+  state.cestino = Array.isArray(data.cestino) ? data.cestino : [];
+  state.auditLog = Array.isArray(data.auditLog) ? data.auditLog : [];
+  localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
+  localStorage.removeItem("bilancio_dati_azzerati");
+  localStorage.setItem("bilancio_budget_annuale", JSON.stringify(state.budgetAnnuale));
+  localStorage.setItem("bilancio_saldo_conto", JSON.stringify(state.saldoConto));
+  localStorage.setItem("bilancio_categorie", JSON.stringify(state.categorie));
+  localStorage.setItem("bilancio_categorie_budget", JSON.stringify(state.categorieBudget));
+  localStorage.setItem("bilancio_voci_entrata", JSON.stringify(state.vociEntrata));
+  localStorage.setItem("bilancio_ricorrenti", JSON.stringify(state.ricorrenti));
+  localStorage.setItem("bilancio_spese_trimestrali", JSON.stringify(state.speseTrimestrali));
+  localStorage.setItem("bilancio_risparmio_reset", JSON.stringify(state.risparmioReset));
+  localStorage.setItem("bilancio_stipendi", JSON.stringify(state.stipendi));
+  localStorage.setItem("bilancio_cestino", JSON.stringify(state.cestino));
+  localStorage.setItem("bilancio_audit_log", JSON.stringify(state.auditLog));
+  applyingRemoteUpdate = false;
+  migraStipendiRpd();
+}
+
+async function creaSnapshotPreRipristino(){
+  if (!cloudReady) return;
+  const now = new Date();
+  const id = `sicurezza-prima-ripristino-${now.toISOString().slice(0,19).replace(/[:T]/g,"-")}`;
+  await salvaSnapshotVerificato(id,"sicurezza");
+}
+
 function importBackup(e){
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const data = JSON.parse(reader.result);
-      if (!confirm("Importare questo backup? Sovrascriverà i dati attuali su questo dispositivo.")) return;
-      state.transazioni = data.transazioni || [];
-      state.budgetAnnuale = data.budgetAnnuale || {};
-      state.saldoConto = data.saldoConto || {};
-      state.categorie = data.categorie || [...DEFAULT_CATEGORIE];
-      state.categorieBudget = data.categorieBudget || [...DEFAULT_CATEGORIE_BUDGET];
-      state.vociEntrata = data.vociEntrata || [...DEFAULT_VOCI_ENTRATA];
-      state.ricorrenti = data.ricorrenti || [];
-      state.speseTrimestrali = data.speseTrimestrali || [];
-      state.risparmioReset = data.risparmioReset || null;
-      state.stipendi = data.stipendi || defaultStipendiConfig();
-      localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
-      saveBudget(); saveSaldo(); saveCategorie(); saveCategorieBudget(); saveVociEntrata(); saveRicorrenti(); saveSpeseTrimestrali(); saveRisparmioReset(); saveStipendi();
-      salvaMovimentiBulk(state.transazioni, []); // ripubblica tutti i movimenti importati sulla collezione cloud
+      if(!operazioneDistruttivaConsentita()) return;
+      if (!backupValido(data)) throw new Error("struttura del backup non riconosciuta");
+      if (data.checksum && data.checksum !== await checksumBackup(data)) throw new Error("checksum non valido: il file potrebbe essere incompleto o alterato");
+      if (!data.checksum && !confirm("Questo è un backup precedente, senza verifica di integrità. Continuare comunque?")) return;
+      if (!cloudReady) throw new Error("cloud non disponibile: per sicurezza il ripristino non è stato avviato");
+      if (!confirm(`Importare questo backup con ${data.transazioni.length} movimenti? Sostituirà i dati attuali su tutti i dispositivi.`)) return;
+      await creaSnapshotPreRipristino();
+      await sostituisciMovimentiCloud(data.transazioni);
+      applicaBackupEsatto(data);
+      await pushToCloud();
+      registraAudit("Backup importato", `${data.transazioni.length} movimenti${data.checksum?", checksum verificato":""}`);
       alert("Backup importato con successo.");
       render();
-    } catch(err){ alert("File non valido: " + err.message); }
+    } catch(err){ alert("Importazione non completata: " + err.message); }
   };
   reader.readAsText(file);
 }
@@ -3209,7 +3434,7 @@ async function populateSnapshotList(){
   container2.innerHTML = list.map(s => {
     const data = new Date(s.createdAt).toLocaleString("it-IT", {day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});
     return `<div class="admin-cat-row">
-      <span style="flex:1;font-size:13px"><b>${s.tipo==="automatico"?"\u{1F4C5} Mensile":s.tipo==="giornaliero"?"\u{1F5D3}\uFE0F Giornaliero":"\u{1F4CC} Manuale"}</b> — ${data} (${(s.transazioni||[]).length} movimenti)</span>
+      <span style="flex:1;font-size:13px"><b>${s.tipo==="automatico"?"\u{1F4C5} Mensile":s.tipo==="giornaliero"?"\u{1F5D3}\uFE0F Giornaliero":"\u{1F4CC} Manuale"}</b> — ${data} (${(s.transazioni||[]).length} movimenti) ${s.checksum?'<span style="color:'+GREEN+'">✓ verificabile</span>':'<span class="sub">legacy</span>'}</span>
       <button class="range-btn" data-restore-snapshot="${s.id}">Ripristina</button>
     </div>`;
   }).join('');
@@ -3358,8 +3583,11 @@ async function pushToCloud(){
       speseTrimestrali: state.speseTrimestrali,
       risparmioReset: state.risparmioReset,
       stipendi: state.stipendi,
+      cestino: state.cestino,
+      auditLog: state.auditLog,
       lastUpdated: Date.now()
     }, {merge: true});
+    localStorage.setItem("bilancio_ultima_sync_ok", String(Date.now()));
     setCloudStatus("\u2601\uFE0F sincronizzato");
   } catch(e) {
     console.error("Errore sync cloud", e);
@@ -3376,18 +3604,45 @@ function salvaMovimento(t){
   const idx = state.transazioni.findIndex(x => x.id === t.id);
   if (idx >= 0) state.transazioni[idx] = t; else state.transazioni.push(t);
   localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
+  segnaPendingSet(t);
   if (!applyingRemoteUpdate && movimentiColRef) {
     movimentiColRef.doc(t.id).set(t)
-      .then(() => setCloudStatus("\u2601\uFE0F sincronizzato"))
+      .then(() => { confermaPending(t.id, "set"); localStorage.setItem("bilancio_ultima_sync_ok",String(Date.now())); setCloudStatus("\u2601\uFE0F sincronizzato"); })
       .catch(e => { console.error("Errore salvataggio movimento", e); setCloudStatus("\u26A0\uFE0F offline (solo locale)"); });
   }
+}
+
+// Modulo diagnostica: test puri, non scrive né modifica i dati dell'utente.
+async function eseguiAutotest(){
+  const errori=[], check=(ok,nome)=>{if(!ok)errori.push(nome);};
+  check(backupValido({transazioni:[{id:"x",anno:2026,mese:1,categoria:"Varie",descrizione:"Test",importo:1}]}),"validazione backup");
+  check(!backupValido({transazioni:[{id:"x",anno:"no"}]}),"rifiuto backup corrotto");
+  check(statoMovimento({anno:2000,mese:1})==="registrato","stato registrato");
+  check(statoMovimento({anno:2999,mese:1})==="previsto","stato previsto");
+  check(statoMovimento({anno:2000,mese:1,stato:"riconciliato"})==="riconciliato","stato riconciliato");
+  const campione={...statoCompleto(),transazioni:[]}; check((await checksumBackup(campione))===(await checksumBackup(campione)),"checksum deterministico");
+  const p=leggiPendingMovimenti(); check(p&&p.set&&p.del,"coda offline");
+  return {ok:errori.length===0,errori,totale:7};
+}
+
+async function aggiornaControlloIntegritaCloud(){
+  const el=document.getElementById("cloudIntegrityStatus"); if(!el) return;
+  if(!cloudReady||!movimentiColRef){el.innerHTML=`<span style="color:${RUST}">Cloud non disponibile: le modifiche restano protette nella coda locale.</span>`;return;}
+  try{
+    const q=await movimentiColRef.get(), pending=leggiPendingMovimenti();
+    const nPending=Object.keys(pending.set).length+Object.keys(pending.del).length;
+    const coerente=q.size===state.transazioni.length || nPending>0;
+    modalitaPrudente=!coerente;
+    const corrente=document.getElementById("cloudIntegrityStatus"); if(corrente) corrente.innerHTML=coerente?`<span style="color:${GREEN}">✓ Cloud raggiungibile: ${q.size} movimenti sul server.</span>`:`<span style="color:${RUST}">⚠ Differenza da controllare: ${state.transazioni.length} locali, ${q.size} sul server. Non eseguire ripristini finché la sincronizzazione non termina.</span>`;
+  }catch(e){modalitaPrudente=true;const corrente=document.getElementById("cloudIntegrityStatus");if(corrente)corrente.innerHTML=`<span style="color:${RUST}">Controllo cloud non riuscito: ${escapeHtml(e.message)}</span>`;}
 }
 function cancellaMovimento(id){
   state.transazioni = state.transazioni.filter(x => x.id !== id);
   localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
+  segnaPendingDelete(id);
   if (!applyingRemoteUpdate && movimentiColRef) {
     movimentiColRef.doc(id).delete()
-      .then(() => setCloudStatus("\u2601\uFE0F sincronizzato"))
+      .then(() => { confermaPending(id, "del"); localStorage.setItem("bilancio_ultima_sync_ok",String(Date.now())); setCloudStatus("\u2601\uFE0F sincronizzato"); })
       .catch(e => { console.error("Errore cancellazione movimento", e); setCloudStatus("\u26A0\uFE0F offline (solo locale)"); });
   }
 }
@@ -3397,6 +3652,8 @@ function cancellaMovimento(id){
 // daScrivere: array di movimenti da salvare. daCancellare: array di id da togliere.
 async function salvaMovimentiBulk(daScrivere, daCancellare){
   localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
+  daScrivere.forEach(segnaPendingSet);
+  daCancellare.forEach(segnaPendingDelete);
   if (applyingRemoteUpdate || !movimentiColRef || (daScrivere.length===0 && daCancellare.length===0)) return;
   const operazioni = [...daScrivere.map(t=>({tipo:"set",t})), ...daCancellare.map(id=>({tipo:"del",id}))];
   try {
@@ -3407,7 +3664,9 @@ async function salvaMovimentiBulk(daScrivere, daCancellare){
         else batch.delete(movimentiColRef.doc(op.id));
       });
       await batch.commit();
+      operazioni.slice(i,i+450).forEach(op => confermaPending(op.tipo==="set" ? op.t.id : op.id, op.tipo==="set" ? "set" : "del"));
     }
+    localStorage.setItem("bilancio_ultima_sync_ok",String(Date.now()));
     setCloudStatus("\u2601\uFE0F sincronizzato");
   } catch(e) { console.error("Errore salvataggio multiplo movimenti", e); setCloudStatus("\u26A0\uFE0F offline (solo locale)"); }
 }
@@ -3423,9 +3682,9 @@ async function salvaMovimentiBulk(daScrivere, daCancellare){
 // completa e reale del server, non solo le differenze.
 let primoSnapshotMovimenti = true;
 function processaSnapshotMovimenti(snapshot){
+  if (sostituzioneMovimentiInCorso) return;
   applyingRemoteUpdate = true;
   if (primoSnapshotMovimenti) {
-    primoSnapshotMovimenti = false;
     const daServer = {};
     snapshot.forEach(doc => { daServer[doc.id] = {...doc.data(), id: doc.id}; });
     const numSulServer = Object.keys(daServer).length;
@@ -3438,11 +3697,17 @@ function processaSnapshotMovimenti(snapshot){
       applyingRemoteUpdate = false;
       return;
     }
+    primoSnapshotMovimenti = false;
     // non perdere movimenti aggiunti in locale pochissimo fa (es. offline, prima
     // che il server rispondesse la prima volta) e non ancora confermati dal server
     state.transazioni.forEach(t => {
       if (!daServer[t.id] && t.createdAt && (Date.now()-t.createdAt) < 60000) daServer[t.id] = t;
     });
+    // Le modifiche esplicitamente rimaste in coda hanno precedenza sul primo
+    // snapshot, indipendentemente da quanto tempo il dispositivo è stato offline.
+    const pending = leggiPendingMovimenti();
+    Object.values(pending.set).forEach(t => { daServer[t.id] = t; });
+    Object.keys(pending.del).forEach(id => { delete daServer[id]; });
     state.transazioni = Object.values(daServer);
   } else {
     snapshot.docChanges().forEach(change => {
@@ -3458,6 +3723,7 @@ function processaSnapshotMovimenti(snapshot){
   }
   localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
   applyingRemoteUpdate = false;
+  sincronizzaPendingMovimenti();
   generaMovimentiRicorrenti();
   render();
   setCloudStatus("\u2601\uFE0F sincronizzato");
@@ -3498,6 +3764,55 @@ function mergeArrayPerId(locale, remoto){
   (locale||[]).forEach(x => { map[x.id] = x; });
   return Object.values(map);
 }
+async function sincronizzaPendingMovimenti(){
+  if (!movimentiColRef) return;
+  const p = leggiPendingMovimenti();
+  try {
+    for (const t of Object.values(p.set)) {
+      await movimentiColRef.doc(t.id).set(t);
+      confermaPending(t.id, "set");
+    }
+    for (const id of Object.keys(p.del)) {
+      await movimentiColRef.doc(id).delete();
+      confermaPending(id, "del");
+    }
+  } catch(e){ console.error("Modifiche offline ancora in attesa", e); setCloudStatus("\u26A0\uFE0F offline (modifiche in attesa)"); }
+}
+
+// Le spese trimestrali erano in precedenza unite soltanto per id. Poiché la voce
+// Mutuo predefinita riceveva un id casuale su ogni browser, ogni nuovo dispositivo
+// ne aggiungeva una copia al cloud. La chiave semantica qui sotto identifica invece
+// la stessa spesa tramite descrizione e fase del trimestre; in questo modo le copie
+// già presenti vengono unificate e non possono più moltiplicare il saldo teorico.
+function chiaveSpesaTrimestrale(cfg){
+  const descrizione = String((cfg && cfg.descrizioneMatch) || "").trim().toLocaleLowerCase("it-IT");
+  const anno = Number(cfg && cfg.prossimaRataAnno) || 0;
+  const mese = Number(cfg && cfg.prossimaRataMese) || 0;
+  const fase = ((anno * 12 + mese) % 3 + 3) % 3;
+  return descrizione + "|" + fase;
+}
+function normalizzaSpeseTrimestrali(lista){
+  const uniche = new Map();
+  (Array.isArray(lista) ? lista : []).forEach(cfg => {
+    const descrizione = String((cfg && cfg.descrizioneMatch) || "").trim();
+    if (!descrizione) return;
+    const pulita = {
+      ...cfg,
+      id: cfg.id || uid(),
+      descrizioneMatch: descrizione,
+      prossimaRataAnno: Number(cfg.prossimaRataAnno),
+      prossimaRataMese: Number(cfg.prossimaRataMese)
+    };
+    const key = chiaveSpesaTrimestrale(pulita);
+    if (!uniche.has(key)) uniche.set(key, pulita);
+  });
+  return Array.from(uniche.values());
+}
+function mergeSpeseTrimestrali(locale, remoto){
+  // L'array locale viene dopo: a parità di spesa mantiene l'ultima configurazione
+  // con cui l'utente sta lavorando, ma senza conservare doppioni con id differenti.
+  return normalizzaSpeseTrimestrali([...(remoto || []), ...(locale || [])]);
+}
 // Come mergeArrayPerId, ma per le regole ricorrenti: se la stessa regola esiste
 // da entrambi i lati, unisce anche le liste "mesiSaltati" (mesi che l'utente ha
 // cancellato apposta) invece di far vincere in blocco una delle due — altrimenti
@@ -3532,29 +3847,43 @@ function mergeArrayStringhe(locale, remoto){
 function applyRemoteData(data){
   applyingRemoteUpdate = true;
   const mancaSpeseTrimestrali = data.speseTrimestrali === undefined;
+  let speseTrimestraliRipulite = false;
   // Chi ha modificato più di recente per davvero vince i conflitti diretti — non
   // più "chi si sincronizza per ultimo", che poteva far tornare indietro una
   // modifica genuinamente più recente fatta su un altro dispositivo.
   const remotoPiuRecente = (data.lastUpdated || 0) > ultimaModificaLocale;
-  const f = (mergeFn, locale, remoto) => remotoPiuRecente ? mergeFn(remoto, locale) : mergeFn(locale, remoto);
-  state.budgetAnnuale = f(mergeDizionarioAnnidato, state.budgetAnnuale, data.budgetAnnuale);
-  state.saldoConto = f(mergeDizionarioSemplice, state.saldoConto, data.saldoConto);
-  state.categorie = f(mergeArrayStringhe, state.categorie, data.categorie && data.categorie.length ? data.categorie : [...DEFAULT_CATEGORIE]);
-  state.categorieBudget = f(mergeArrayStringhe, state.categorieBudget, data.categorieBudget && data.categorieBudget.length ? data.categorieBudget : [...DEFAULT_CATEGORIE_BUDGET]);
-  state.vociEntrata = f(mergeArrayStringhe, state.vociEntrata, data.vociEntrata && data.vociEntrata.length ? data.vociEntrata : [...DEFAULT_VOCI_ENTRATA]);
-  state.ricorrenti = f(mergeRicorrenti, state.ricorrenti, data.ricorrenti);
-  // se il documento cloud non ha ancora questo campo (perché creato prima che esistesse questa
-  // funzione), NON lo svuotiamo: teniamo il valore locale (già pre-impostato) e lo carichiamo su cloud.
-  if (!mancaSpeseTrimestrali) state.speseTrimestrali = f(mergeArrayPerId, state.speseTrimestrali, data.speseTrimestrali);
-  if (data.risparmioReset !== undefined && remotoPiuRecente) state.risparmioReset = data.risparmioReset;
-  if (data.stipendi !== undefined && remotoPiuRecente) state.stipendi = data.stipendi;
+  // Queste configurazioni vivono in un unico documento con lastUpdated: devono
+  // seguire una semantica "versione più recente vince". La vecchia unione degli
+  // array rendeva impossibile cancellare categorie, ricorrenze o rate: una copia
+  // più vecchia le aggiungeva di nuovo al caricamento successivo.
+  if (remotoPiuRecente) {
+    if (data.budgetAnnuale !== undefined) state.budgetAnnuale = data.budgetAnnuale;
+    if (data.saldoConto !== undefined) state.saldoConto = data.saldoConto;
+    if (Array.isArray(data.categorie)) state.categorie = data.categorie;
+    if (Array.isArray(data.categorieBudget)) state.categorieBudget = data.categorieBudget;
+    if (Array.isArray(data.vociEntrata)) state.vociEntrata = data.vociEntrata;
+    if (Array.isArray(data.ricorrenti)) state.ricorrenti = data.ricorrenti;
+    if (!mancaSpeseTrimestrali) {
+      const pulite = normalizzaSpeseTrimestrali(data.speseTrimestrali);
+      speseTrimestraliRipulite = pulite.length !== (data.speseTrimestrali || []).length;
+      state.speseTrimestrali = pulite;
+    }
+    if (data.risparmioReset !== undefined) state.risparmioReset = data.risparmioReset;
+    if (data.stipendi !== undefined) state.stipendi = data.stipendi;
+    if (Array.isArray(data.cestino)) state.cestino = data.cestino;
+    if (Array.isArray(data.auditLog)) state.auditLog = data.auditLog;
+  }
+  localStorage.setItem("bilancio_cestino",JSON.stringify(state.cestino));
+  localStorage.setItem("bilancio_audit_log",JSON.stringify(state.auditLog));
   saveBudget(); saveSaldo(); saveCategorie(); saveCategorieBudget(); saveVociEntrata(); saveRicorrenti(); saveSpeseTrimestrali(); saveRisparmioReset(); saveStipendi();
   applyingRemoteUpdate = false;
   migraStipendiRpd(); // se i dati arrivati dal cloud sono in formato vecchio (senza scaglioni ufficiali), li aggiorna subito e li ripubblica corretti sul cloud
   generaMovimentiRicorrenti();
   render();
   setCloudStatus("\u2601\uFE0F sincronizzato");
-  if (mancaSpeseTrimestrali) pushToCloud();
+  // Se il dispositivo aveva modifiche di configurazione più recenti rimaste
+  // offline, il semplice ascolto del server non basta: le ripubblichiamo ora.
+  if (!remotoPiuRecente || mancaSpeseTrimestrali || speseTrimestraliRipulite) pushToCloud();
 }
 
 function initCloudSync(){
@@ -3610,7 +3939,8 @@ function migrazioneMutuoDefault(){
   localStorage.setItem("bilancio_mutuo_seed_v1", "1");
   const haGiaMutuo = state.speseTrimestrali.some(c => (c.descrizioneMatch||"").toLowerCase().includes("mutuo"));
   if (!haGiaMutuo) {
-    state.speseTrimestrali.push({id: uid(), descrizioneMatch: "mutuo", prossimaRataAnno: 2026, prossimaRataMese: 10});
+    state.speseTrimestrali.push({id: "trimestrale-mutuo-default", descrizioneMatch: "mutuo", prossimaRataAnno: 2026, prossimaRataMese: 10});
+    state.speseTrimestrali = normalizzaSpeseTrimestrali(state.speseTrimestrali);
     saveSpeseTrimestrali();
     render();
   }
@@ -3634,7 +3964,16 @@ function statoCompleto(){
     speseTrimestrali: state.speseTrimestrali,
     risparmioReset: state.risparmioReset,
     stipendi: state.stipendi
+    ,cestino: state.cestino
+    ,auditLog: state.auditLog
   };
+}
+
+async function salvaSnapshotVerificato(id,tipo){
+  const dati=statoCompleto();
+  const checksum=await checksumBackup(dati);
+  await snapshotsCollection().doc(id).set({...dati,createdAt:Date.now(),tipo,checksum,conteggioMovimenti:dati.transazioni.length,versione:APP_VERSION});
+  localStorage.setItem("bilancio_ultimo_backup_ok",String(Date.now()));
 }
 
 async function creaSnapshotMensileSeNecessario(){
@@ -3644,7 +3983,9 @@ async function creaSnapshotMensileSeNecessario(){
   const last = localStorage.getItem("bilancio_ultimo_backup_mensile");
   if (last === key) return;
   try {
-    await snapshotsCollection().doc(key).set({ ...statoCompleto(), createdAt: Date.now(), tipo: "automatico" });
+    const ref = snapshotsCollection().doc(key);
+    const esistente = await ref.get();
+    if (!esistente.exists) await salvaSnapshotVerificato(key,"automatico");
     localStorage.setItem("bilancio_ultimo_backup_mensile", key);
   } catch(e) { console.error("Errore snapshot mensile", e); }
 }
@@ -3659,7 +4000,9 @@ async function creaSnapshotGiornalieroSeNecessario(){
   const last = localStorage.getItem("bilancio_ultimo_backup_giornaliero");
   if (last === key) return;
   try {
-    await snapshotsCollection().doc(key).set({ ...statoCompleto(), createdAt: Date.now(), tipo: "giornaliero" });
+    const ref = snapshotsCollection().doc(key);
+    const esistente = await ref.get();
+    if (!esistente.exists) await salvaSnapshotVerificato(key,"giornaliero");
     localStorage.setItem("bilancio_ultimo_backup_giornaliero", key);
     pulisciSnapshotGiornalieriVecchi();
   } catch(e) { console.error("Errore snapshot giornaliero", e); }
@@ -3679,7 +4022,7 @@ async function creaSnapshotManuale(){
   const now = new Date();
   const id = `manuale-${now.toISOString().slice(0,19).replace(/[:T]/g,"-")}`;
   try {
-    await snapshotsCollection().doc(id).set({ ...statoCompleto(), createdAt: Date.now(), tipo: "manuale" });
+    await salvaSnapshotVerificato(id,"manuale");
     alert("Snapshot creato sul server.");
     render();
   } catch(e) { alert("Errore nella creazione dello snapshot: " + e.message); }
@@ -3696,45 +4039,85 @@ async function caricaListaSnapshot(){
 }
 
 async function ripristinaSnapshot(id){
+  if(!operazioneDistruttivaConsentita()) return;
   if (!confirm(`Ripristinare lo snapshot del ${id}? Questo SOVRASCRIVE i dati attuali (locali e sul server) con quelli salvati in quello snapshot. Non è reversibile se non hai un altro backup più recente.`)) return;
   const snap = cachedSnapshotsList.find(s => s.id === id);
   if (!snap) { alert("Snapshot non trovato."); return; }
-  // Il ripristino è una sostituzione completa: cancella dalla collezione cloud
-  // tutti i movimenti che non fanno parte dello snapshot, poi scrive quelli che
-  // lo snapshot prevede.
-  if (movimentiColRef) {
-    try {
-      const tutti = await movimentiColRef.get();
-      const idsSnapshot = new Set((snap.transazioni||[]).map(t=>t.id));
-      const daCancellare = tutti.docs.map(d => d.id).filter(id => !idsSnapshot.has(id));
-      for (let i=0; i<daCancellare.length; i+=450){
-        const batch = db.batch();
-        daCancellare.slice(i,i+450).forEach(id => batch.delete(movimentiColRef.doc(id)));
-        await batch.commit();
-      }
-    } catch(e) { console.error("Errore pulizia movimenti prima del ripristino", e); }
+  try {
+    if (!backupValido(snap)) throw new Error("snapshot non valido o incompleto");
+    if (snap.checksum && snap.checksum !== await checksumBackup(snap)) throw new Error("checksum dello snapshot non valido");
+    await creaSnapshotPreRipristino();
+    await sostituisciMovimentiCloud(snap.transazioni);
+    applicaBackupEsatto(snap);
+    await pushToCloud();
+    alert("Ripristino completato.");
+    render();
+  } catch(e){ alert("Ripristino annullato: " + e.message); }
+}
+
+// ============================================================
+// AUTENTICAZIONE FIREBASE — protegge davvero Firestore.
+// Gli account si creano solo dalla console Firebase: l'app consente il login,
+// non la registrazione pubblica.
+// ============================================================
+let serviziCloudAvviati=false;
+function mostraLoginFirebase(messaggio=""){
+  const el=document.getElementById("firebaseAuthScreen");
+  el.classList.remove("hidden");
+  el.innerHTML=`<div class="auth-card">
+    <h2 style="font-family:ui-serif,Georgia,serif;margin:0 0 8px">Accesso al Bilancio Familiare</h2>
+    <p class="sub">Accedi con l'account autorizzato. I dati Firestore non sono accessibili senza autenticazione.</p>
+    <input type="email" id="firebaseEmail" autocomplete="username" placeholder="E-mail">
+    <input type="password" id="firebasePassword" autocomplete="current-password" placeholder="Password">
+    <button class="add-btn" id="firebaseLoginBtn" style="width:100%;justify-content:center;margin-top:8px">Accedi</button>
+    <button class="range-btn" id="firebaseResetBtn" style="width:100%;margin-top:8px">Password dimenticata</button>
+    <p id="firebaseAuthMessage" class="sub" role="alert" style="color:${RUST};margin-bottom:0">${escapeHtml(messaggio)}</p>
+  </div>`;
+  const eseguiLogin=async()=>{
+    const email=document.getElementById("firebaseEmail").value.trim(), password=document.getElementById("firebasePassword").value;
+    const msg=document.getElementById("firebaseAuthMessage");
+    if(!email||!password){msg.textContent="Inserisci e-mail e password.";return;}
+    try{msg.textContent="Accesso in corso...";await auth.signInWithEmailAndPassword(email,password);}
+    catch(e){console.error("Login Firebase",e);msg.textContent="Accesso non riuscito. Controlla le credenziali.";}
+  };
+  document.getElementById("firebaseLoginBtn").onclick=eseguiLogin;
+  document.getElementById("firebasePassword").onkeydown=e=>{if(e.key==="Enter")eseguiLogin();};
+  document.getElementById("firebaseResetBtn").onclick=async()=>{
+    const email=document.getElementById("firebaseEmail").value.trim(), msg=document.getElementById("firebaseAuthMessage");
+    if(!email){msg.textContent="Inserisci prima la tua e-mail.";return;}
+    try{await auth.sendPasswordResetEmail(email);msg.style.color=GREEN;msg.textContent="Se l'account è autorizzato, riceverai l'e-mail di ripristino.";}
+    catch(e){msg.textContent="Non è stato possibile inviare il ripristino.";}
+  };
+}
+function avviaCloudAutenticato(user){
+  cloudReady=true;
+  document.getElementById("firebaseAuthScreen").classList.add("hidden");
+  const label=document.getElementById("firebaseUserLabel"); if(label) label.textContent=`· ${user.email||"utente autenticato"}`;
+  const out=document.getElementById("firebaseLogoutBtn"); if(out){out.style.display="inline-block";out.onclick=async()=>{await auth.signOut();location.reload();};}
+  setCloudStatus("\u{1F512} autenticato, sincronizzazione...");
+  if(!serviziCloudAvviati){
+    serviziCloudAvviati=true;
+    migraMovimentiAColezioneSeparata().then(()=>{initCloudSync();initMovimentiSync();});
   }
-  state.transazioni = snap.transazioni || [];
-  localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
-  await salvaMovimentiBulk(state.transazioni, []);
-  applyRemoteData(snap);
-  await pushToCloud();
-  alert("Ripristino completato.");
-  render();
 }
 
 // ---------- init ----------
 loadState();
 render();
-migraMovimentiAColezioneSeparata().then(() => {
-  initCloudSync();
-  initMovimentiSync();
-});
-if (localStorage.getItem("bilancio_password_hash")) {
-  showLockScreen();
-} else {
-  maybeShowReminder();
-}
+if(auth){
+  auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(e=>console.error("Persistenza Auth",e));
+  auth.onAuthStateChanged(user=>{
+    if(user){
+      avviaCloudAutenticato(user);
+      if(localStorage.getItem("bilancio_password_hash")) showLockScreen(); else maybeShowReminder();
+    }else{
+      cloudReady=false; serviziCloudAvviati=false;
+      setCloudStatus("\u{1F512} accesso richiesto");
+      const out=document.getElementById("firebaseLogoutBtn"); if(out) out.style.display="none";
+      mostraLoginFirebase();
+    }
+  });
+}else mostraLoginFirebase("Firebase Authentication non è disponibile.");
 
 </script>
 </body>
