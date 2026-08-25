@@ -96,6 +96,17 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
 .budget-total{display:flex;justify-content:space-between;padding-top:14px;font-weight:700;}
 .saldo-input{width:100px;padding:4px 6px;border-radius:5px;border:1px solid var(--border-soft);font-size:12px;}
 .footer-note{color:var(--muted);font-size:12px;margin-top:30px;text-align:center;}
+.statement-box{margin-top:18px;padding:16px;border:1px solid var(--border);border-radius:10px;background:#FAF9F5;}
+.statement-upload{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0;}
+.statement-result{margin-top:14px;display:grid;gap:10px;}
+.statement-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.statement-kpi{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px;}
+.statement-kpi small{display:block;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em;}
+.statement-kpi b{display:block;margin-top:4px;font-family:ui-monospace,Menlo,monospace;}
+.statement-list{max-height:230px;overflow:auto;background:#fff;border:1px solid var(--border);border-radius:8px;padding:4px 10px;}
+.statement-row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid #EFEBDF;font-size:12px;}
+.statement-row:last-child{border-bottom:0;}
+@media(max-width:700px){.statement-summary{grid-template-columns:1fr;}}
 .chart-canvas{width:100%;height:280px;display:block;}
 .admin-cat-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #EFEBDF;}
 .admin-cat-row input[type="text"]{flex:1;padding:6px 8px;border-radius:6px;border:1px solid var(--border-soft);font-size:13px;}
@@ -220,6 +231,7 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
 const TX_SEED = []; // Dati reali rimossi dal sorgente pubblico: caricati solo da Firestore autenticato.
 const BG_SEED = []; // Budget reali rimossi dal sorgente pubblico: caricati solo da Firestore autenticato.
@@ -431,8 +443,28 @@ function shiftMonth(anno, mese, delta){
   return {anno:d.getFullYear(), mese:d.getMonth()+1};
 }
 function entrataPrevistaMese(budget, voce, mese){
-  const ordinaria = (budget["ENT::"+voce] || 0) / 12;
-  return ordinaria + (mese === 12 ? (budget["13::"+voce] || 0) : 0);
+  // Il valore inserito nel Budget e' una media annua normalizzata su 12 mesi:
+  // la tredicesima e' gia compresa e serve solo a ricostruire il flusso di cassa.
+  return (budget["ENT::"+voce] || 0) / 12;
+}
+function flussoStipendioCassa(mediaMensile,tredicesima,mese){
+  return Number(mediaMensile||0)-Number(tredicesima||0)/12+(mese===12?Number(tredicesima||0):0);
+}
+
+function rettificaTredicesimeCassa(anno, mese){
+  const budget = state.budgetAnnuale[anno] || {};
+  let rettifica = 0;
+  state.vociEntrata.forEach(voce => {
+    const tredicesima = Number(budget["13::"+voce] || 0);
+    if (!tredicesima) return;
+    const cerca = voce.toLowerCase();
+    const presente = state.transazioni.some(t => t.anno===anno && t.mese===mese && t.categoria==="Entrate" && String(t.descrizione||"").toLowerCase().includes(cerca));
+    if (!presente) return;
+    // Movimento registrato = media annua / 12. Sul conto arrivano invece
+    // 12 mensilita' ordinarie, piu' la tredicesima nel mese configurato (dicembre).
+    rettifica += flussoStipendioCassa(0,tredicesima,mese);
+  });
+  return rettifica;
 }
 
 // ---------- state ----------
@@ -457,6 +489,7 @@ let state = {
   risparmioReset: null,
   stipendi: null,
   mostraDettaglioMutuo: false,
+  analisiEstratto: null,
   pendingDeleteId: null,
   ricorrenti: [],
   speseTrimestrali: [],
@@ -709,7 +742,8 @@ function aggiustamentoTrimestraleUscite(anno, mese){
 }
 
 function riepilogoCassaMese(anno, mese){
-  const entrate = state.transazioni.filter(t => t.anno===anno && t.mese===mese && t.categoria==="Entrate").reduce((s,t)=>s+t.importo,0);
+  const entrateNormalizzate = state.transazioni.filter(t => t.anno===anno && t.mese===mese && t.categoria==="Entrate").reduce((s,t)=>s+t.importo,0);
+  const entrate = entrateNormalizzate + rettificaTredicesimeCassa(anno, mese);
   const configurazioni = normalizzaSpeseTrimestrali(state.speseTrimestrali || []);
   const eTrimestrale = t => configurazioni.find(cfg => String(t.descrizione||"").toLowerCase().includes(String(cfg.descrizioneMatch||"").toLowerCase()));
   let uscite = 0;
@@ -1662,7 +1696,7 @@ function renderBudgetView(){
   const years = getYears();
   const year = state.budgetYear || years[years.length-2] || years[0];
   const current = state.budgetAnnuale[year] || {};
-  const entratePreviste = state.vociEntrata.reduce((s,v)=>s+(current["ENT::"+v]||0)+(current["13::"+v]||0),0);
+  const entratePreviste = state.vociEntrata.reduce((s,v)=>s+(current["ENT::"+v]||0),0);
   const totaleUscitePreviste = state.categorieBudget.reduce((s,c)=>s+(current[c]||0),0);
   const risparmioPrevisto = entratePreviste - totaleUscitePreviste;
 
@@ -1699,12 +1733,12 @@ function renderBudgetView(){
     <div class="card-title-row"><h3 style="margin-bottom:0">Entrate previste</h3>
       <select class="big-select" id="budgetYearSelect">${years.map(y=>`<option value="${y}" ${year===y?'selected':''}>${y}</option>`).join('')}</select>
     </div>
-    <p class="sub" style="margin-top:-8px;margin-bottom:14px">Scrivi la cifra mensile per voce: il totale annuale si calcola da solo. "Media reale" è quanto hai effettivamente incassato in media al mese quest'anno, per confronto.</p>
+    <p class="sub" style="margin-top:-8px;margin-bottom:14px">Scrivi la media mensile normalizzata (netto annuo diviso 12), comprensiva della tredicesima. Indica poi sotto l'importo specifico della tredicesima: serve solo a ricostruire gli accrediti reali sul conto. "Media reale" confronta i movimenti registrati.</p>
     ${state.vociEntrata.length===0 ? '<p class="empty">Nessuna voce di entrata configurata. Vai in Admin per aggiungerne una.</p>' : state.vociEntrata.map(v => {
       const media = mediaRealeVoce(v);
       const prevMensile = (current["ENT::"+v]||0)/12;
       const tredicesima = current["13::"+v]||0;
-      const prevAnnuo = (current["ENT::"+v]||0) + tredicesima;
+      const prevAnnuo = (current["ENT::"+v]||0);
       const diff = media - prevMensile;
       return `<div class="budget-item" style="flex-direction:column;align-items:stretch;gap:6px">
         <div style="display:flex;justify-content:space-between;align-items:center">
@@ -1716,7 +1750,7 @@ function renderBudgetView(){
           </div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <span class="sub">Tredicesima netta (accredito a dicembre)</span>
+          <span class="sub">Tredicesima netta inclusa nell'annuo (accredito a dicembre)</span>
           <div class="budget-input-wrap"><span>&euro;</span><input type="text" inputmode="decimal" class="budget-tredicesima-input" data-voce="${escapeHtml(v)}" value="${tredicesima?String(tredicesima).replace('.',','):''}" placeholder="0" style="border-color:${GREEN}"></div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:11px">
@@ -1778,6 +1812,106 @@ function renderBudgetView(){
   `;
 }
 
+function operazioniCassaAttese(anno, mese){
+  const out=[];
+  const budget=state.budgetAnnuale[anno]||{};
+  const trimestrali=normalizzaSpeseTrimestrali(state.speseTrimestrali||[]);
+  const eTrimestrale=t=>trimestrali.find(cfg=>String(t.descrizione||"").toLowerCase().includes(String(cfg.descrizioneMatch||"").toLowerCase()));
+  state.transazioni.filter(t=>t.categoria==="Entrate"&&t.anno===anno&&t.mese===mese).forEach(t=>{
+    let importo=t.importo;
+    const voce=state.vociEntrata.find(v=>String(t.descrizione||"").toLowerCase().includes(v.toLowerCase()));
+    if(voce){
+      const tred=Number(budget["13::"+voce]||0);
+      if(tred)importo=flussoStipendioCassa(importo,tred,mese);
+    }
+    out.push({segno:1,importo,descrizione:t.descrizione,giorno:t.giorno||null,tipo:voce?"stipendio":"entrata",id:t.id});
+  });
+  state.transazioni.filter(t=>t.categoria!=="Entrate"&&!eTrimestrale(t)).forEach(t=>{
+    const cash=t.amex?shiftMonth(t.anno,t.mese,1):{anno:t.anno,mese:t.mese};
+    if(cash.anno===anno&&cash.mese===mese)out.push({segno:-1,importo:t.importo,descrizione:t.descrizione,giorno:t.giorno||null,tipo:t.amex?"amex":"uscita",id:t.id});
+  });
+  trimestrali.forEach(cfg=>{
+    const diff=(anno*12+mese)-(cfg.prossimaRataAnno*12+cfg.prossimaRataMese);
+    if((((diff%3)+3)%3)!==0)return;
+    let totale=0;
+    for(let i=0;i<3;i++){
+      const p=shiftMonth(anno,mese,-i);
+      totale+=state.transazioni.filter(t=>t.categoria!=="Entrate"&&t.anno===p.anno&&t.mese===p.mese&&String(t.descrizione||"").toLowerCase().includes(String(cfg.descrizioneMatch||"").toLowerCase())).reduce((s,t)=>s+t.importo,0);
+    }
+    if(totale)out.push({segno:-1,importo:totale,descrizione:cfg.descrizioneMatch||"Rata trimestrale",giorno:null,tipo:"trimestrale",id:"trim-"+anno+"-"+mese+"-"+cfg.descrizioneMatch});
+  });
+  return out;
+}
+
+function numeroItaliano(s){
+  let v=String(s||"").replace(/\s/g,"").replace(/[€EUR]/gi,"");
+  const parentesi=/^\(.*\)$/.test(v);v=v.replace(/[()]/g,"");
+  if(v.includes(","))v=v.replace(/\./g,"").replace(",",".");
+  const n=Number(v.replace(/[^0-9+\-.]/g,""));
+  return Number.isFinite(n)?(parentesi?-Math.abs(n):n):null;
+}
+function normalizzaTestoMatch(s){return String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9 ]/g," ").replace(/\s+/g," ").trim();}
+function similaritaDescrizione(a,b){
+  const stop=new Set(["pagamento","addebito","accredito","bonifico","carta","operazione","euro","del","della","con"]);
+  const A=new Set(normalizzaTestoMatch(a).split(" ").filter(x=>x.length>2&&!stop.has(x))),B=new Set(normalizzaTestoMatch(b).split(" ").filter(x=>x.length>2&&!stop.has(x)));
+  if(!A.size||!B.size)return 0;let comuni=0;A.forEach(x=>{if(B.has(x))comuni++;});return comuni/Math.max(A.size,B.size);
+}
+async function estraiOperazioniPdf(file){
+  if(!window.pdfjsLib)throw new Error("Lettore PDF non disponibile. Ricarica la pagina e riprova.");
+  pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
+  const righe=[];
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p),content=await page.getTextContent(),byY={};
+    content.items.forEach(it=>{const y=Math.round((it.transform&&it.transform[5])||0);(byY[y]=byY[y]||[]).push(it);});
+    Object.keys(byY).sort((a,b)=>b-a).forEach(y=>righe.push(byY[y].sort((a,b)=>(a.transform?.[4]||0)-(b.transform?.[4]||0)).map(x=>x.str).join(" ").replace(/\s+/g," ").trim()));
+  }
+  const ops=[];
+  const dataRx=/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/;
+  // Consideriamo solo importi seguiti da simbolo/valuta: evita di scambiare
+  // orari, numeri pratica e date presenti nelle descrizioni BPER per importi.
+  const impRx=/[+\-]?\s*(?:\d{1,3}(?:\.\d{3})*|\d+)\,\d{2}\s*(?:€|EUR)|[+\-]?\s*(?:\d{1,3}(?:,\d{3})*|\d+)\.\d{2}\s*(?:€|EUR)/gi;
+  righe.forEach(r=>{
+    const dm=r.match(dataRx);if(!dm||dm.index>2)return;
+    const dopoData=r.slice(dm.index+dm[0].length,dm.index+dm[0].length+1);if(dopoData==="/")return;
+    const tokens=r.match(impRx)||[];if(!tokens.length)return;
+    let token=tokens[tokens.length-1],importo=numeroItaliano(token);if(importo===null||Math.abs(importo)<0.01)return;
+    if(!/^[+\-]/.test(token.trim())){
+      const positivo=/accredito|stipend|emolument|entrata|rimborso|bonifico ricevuto|versamento/i.test(r);
+      importo=positivo?Math.abs(importo):-Math.abs(importo);
+    }
+    const anno=Number(dm[3].length===2?"20"+dm[3]:dm[3]);
+    ops.push({giorno:Number(dm[1]),mese:Number(dm[2]),anno,importo,descrizione:r.replace(dm[0],"").replace(token,"").trim(),riga:r,pending:/da contabilizzare/i.test(r)});
+  });
+  return {ops,righeTotali:righe.length,pagine:pdf.numPages};
+}
+function confrontaEstratto(ops,anno,mese){
+  const banca=ops.filter(o=>o.anno===anno&&o.mese===mese),app=operazioniCassaAttese(anno,mese),usati=new Set(),abbinati=[];
+  app.forEach(a=>{
+    let best=-1,bestScore=Infinity;
+    banca.forEach((b,i)=>{if(usati.has(i)||Math.sign(b.importo)!==a.segno)return;const d=Math.abs(Math.abs(b.importo)-a.importo);if(d>Math.max(1,a.importo*.015))return;const score=d-similaritaDescrizione(a.descrizione,b.descrizione)*2;if(score<bestScore){best=i;bestScore=score;}});
+    if(best>=0){usati.add(best);abbinati.push({app:a,banca:banca[best]});}
+  });
+  const appIds=new Set(abbinati.map(x=>x.app.id));
+  const nonApp=app.filter(a=>!appIds.has(a.id)),nonBanca=banca.filter((_,i)=>!usati.has(i));
+  return {anno,mese,banca,app,abbinati,nonApp,nonBanca,pending:banca.filter(o=>o.pending),totBanca:banca.reduce((s,o)=>s+o.importo,0),totApp:app.reduce((s,o)=>s+o.segno*o.importo,0)};
+}
+
+function renderAnalisiEstratto(){
+  const a=state.analisiEstratto;if(!a)return '<div class="empty">Nessun estratto analizzato.</div>';
+  if(a.errore)return `<div class="warn-box">${escapeHtml(a.errore)}</div>`;
+  if(a.anno!==state.selYear||a.mese!==state.selMonth)return '<div class="empty">Nessun estratto analizzato per questo mese.</div>';
+  const diff=a.totBanca-a.totApp;
+  const lista=(titolo,arr,lato)=>`<div><b style="font-size:12px">${titolo} (${arr.length})</b><div class="statement-list">${arr.length?arr.slice(0,40).map(x=>{const o=lato==="app"?x:x;const val=lato==="app"?o.segno*o.importo:o.importo;return `<div class="statement-row"><span>${escapeHtml(o.descrizione||o.riga||"Operazione")}</span><b style="color:${val>=0?GREEN:RUST}">${val>=0?'+':''}${eur(val)}</b></div>`;}).join(''):'<div class="empty" style="padding:10px 0">Nessuna</div>'}</div></div>`;
+  return `<div class="statement-result">
+    <div class="statement-summary"><div class="statement-kpi"><small>Movimenti banca rilevati</small><b>${a.banca.length}${a.pending?.length?` <span style="font-size:10px;color:${GOLD}">(${a.pending.length} pendenti)</span>`:''}</b></div><div class="statement-kpi"><small>Abbinati automaticamente</small><b style="color:${GREEN}">${a.abbinati.length}</b></div><div class="statement-kpi"><small>Scostamento netto</small><b style="color:${Math.abs(diff)<=1?GREEN:RUST}">${eur(diff)}</b></div></div>
+    ${Math.abs(diff)<=1?'<div style="color:'+GREEN+';font-size:12px;font-weight:700">✓ Totali coerenti entro 1 euro.</div>':'<div class="warn-box">Lo scostamento deriva probabilmente dalle operazioni non abbinate qui sotto. Controlla prima quelle presenti in banca ma assenti nell’app.</div>'}
+    ${lista("In banca ma non nell’app",a.nonBanca,"banca")}
+    ${lista("Nell’app ma non trovati in banca",a.nonApp,"app")}
+    <div class="sub">Analisi automatica locale: nessun contenuto del PDF viene salvato o inviato a Firestore. I PDF scansionati come immagini richiedono OCR e potrebbero non essere leggibili.</div>
+  </div>`;
+}
+
 function renderSaldoView(){
   const oggi = new Date();
   const oggiAnno = oggi.getFullYear(), oggiMese = oggi.getMonth()+1;
@@ -1810,7 +1944,7 @@ function renderSaldoView(){
       <td style="font-weight:600">${MESI[m.mese-1].slice(0,3)} ${m.anno}</td>
       <td><input type="text" inputmode="decimal" class="saldo-input" data-key="${key}" value="${saldo??''}" placeholder="&mdash;"></td>
       <td style="font-family:ui-monospace,monospace">${variazione!=null?eur(variazione):'&mdash;'}</td>
-      <td style="font-family:ui-monospace,monospace">${eur(risparmioAggiustato)}${delta!==0?` <span class="sub" title="Aggiustato per rate trimestrali">*</span>`:''}</td>
+      <td style="font-family:ui-monospace,monospace">${eur(risparmioAggiustato)}${delta!==0?` <span class="sub" title="Aggiustato per flussi di cassa reali">*</span>`:''}</td>
       <td style="font-family:ui-monospace,monospace;color:${diff!=null?(Math.abs(diff)<=50?GREEN:RUST):NAVY}">${diff!=null?eur(diff):'&mdash;'}</td>
       <td>${esito?`<span class="esito" style="color:${esito.color}">${esito.icon} ${esito.label}</span>`:''}</td>
     </tr>`;
@@ -1820,11 +1954,21 @@ function renderSaldoView(){
   <div class="card">
     <h3>Saldo Conto — riconciliazione mensile</h3>
     <p class="sub" style="margin-top:-8px;margin-bottom:6px">Ogni fine mese scrivi il saldo reale del conto. Il sistema controlla da solo se combacia con i movimenti registrati.</p>
-    <p class="sub" style="margin-top:0;margin-bottom:18px">* Il risparmio teorico segue i movimenti effettivi del conto: Amex nel mese successivo e mutuo nei mesi gennaio, aprile, luglio e ottobre.</p>
+    <p class="sub" style="margin-top:0;margin-bottom:18px">* Il risparmio teorico ricostruisce i flussi effettivi del conto: stipendio inserito come netto annuo ÷ 12 ma accreditato in 13 mensilità, Amex nel mese successivo e mutuo nei mesi gennaio, aprile, luglio e ottobre.</p>
     <table>
       <thead><tr><th>Mese</th><th>Saldo reale</th><th>Variazione</th><th>Risparmio teorico</th><th>Differenza</th><th>Esito</th></tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>
+    <div class="statement-box">
+      <h3 style="margin-bottom:4px">Trova lo scostamento dall’estratto conto</h3>
+      <p class="sub" style="margin:0">Carica il PDF del mese selezionato: l’app legge localmente le operazioni, le confronta con i movimenti di cassa (tredicesima, Amex e mutuo trimestrale compresi) e segnala quelle non abbinate.</p>
+      <div class="statement-upload">
+        <input type="file" id="statementPdf" accept="application/pdf,.pdf">
+        <button class="add-btn" id="analyzeStatementBtn">Analizza PDF di ${MESI[state.selMonth-1]} ${state.selYear}</button>
+        <span id="statementStatus" class="sub"></span>
+      </div>
+      <div id="statementResult">${renderAnalisiEstratto()}</div>
+    </div>
   </div>
   `;
 }
@@ -2802,6 +2946,21 @@ function attachHandlers(){
   }
 
   if (state.tab === "saldo") {
+    const analyzeBtn=document.getElementById("analyzeStatementBtn");
+    if(analyzeBtn)analyzeBtn.onclick=async()=>{
+      const input=document.getElementById("statementPdf"),status=document.getElementById("statementStatus"),file=input&&input.files&&input.files[0];
+      if(!file){alert("Seleziona prima il PDF dell'estratto conto.");return;}
+      if(file.size>20*1024*1024){alert("Il PDF supera 20 MB.");return;}
+      analyzeBtn.disabled=true;status.textContent="Lettura e confronto in corso…";
+      try{
+        const estratto=await estraiOperazioniPdf(file);
+        if(!estratto.ops.length)throw new Error("Non ho trovato operazioni leggibili. Il PDF potrebbe essere una scansione oppure usare un formato non riconosciuto.");
+        state.analisiEstratto=confrontaEstratto(estratto.ops,state.selYear,state.selMonth);
+        state.analisiEstratto.pagine=estratto.pagine;
+        status.textContent=`${estratto.pagine} pagine, ${state.analisiEstratto.banca.length} operazioni del mese rilevate`;
+      }catch(e){state.analisiEstratto={errore:e.message||"Impossibile leggere il PDF."};status.textContent="Analisi non riuscita";}
+      document.getElementById("statementResult").innerHTML=renderAnalisiEstratto();analyzeBtn.disabled=false;
+    };
     document.querySelectorAll(".saldo-input").forEach(inp => {
       inp.onchange = e => {
         const key = inp.dataset.key;
@@ -3801,9 +3960,11 @@ async function eseguiAutotest(){
   check(statoMovimento({anno:2000,mese:1})==="registrato","stato registrato");
   check(statoMovimento({anno:2999,mese:1})==="previsto","stato previsto");
   check(statoMovimento({anno:2000,mese:1,stato:"riconciliato"})==="riconciliato","stato riconciliato");
+  check(Math.abs(flussoStipendioCassa(3000,2400,1)-2800)<0.001,"stipendio ordinario da media /12");
+  check(Math.abs(flussoStipendioCassa(3000,2400,12)-5200)<0.001,"tredicesima nel flusso di dicembre");
   const campione={...statoCompleto(),transazioni:[]}; check((await checksumBackup(campione))===(await checksumBackup(campione)),"checksum deterministico");
   const p=leggiPendingMovimenti(); check(p&&p.set&&p.del,"coda offline");
-  return {ok:errori.length===0,errori,totale:7};
+  return {ok:errori.length===0,errori,totale:9};
 }
 
 async function aggiornaControlloIntegritaCloud(){
