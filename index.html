@@ -1884,29 +1884,64 @@ async function caricaPdfJs(){
   lib.GlobalWorkerOptions.workerSrc="./pdf.worker.mjs";
   return lib;
 }
+function trovaResponsabiliScostamento(lista,target,valore){
+  const tolleranza=1,items=lista.filter(x=>valore(x)>0).slice(0,180),risultati=[];
+  const aggiungi=indici=>{
+    const chiave=indici.join("-");
+    if(!risultati.some(r=>r.chiave===chiave))risultati.push({chiave,items:indici.map(i=>items[i]),totale:indici.reduce((s,i)=>s+valore(items[i]),0)});
+  };
+  for(let i=0;i<items.length&&risultati.length<8;i++)if(Math.abs(valore(items[i])-target)<=tolleranza)aggiungi([i]);
+  for(let i=0;i<items.length&&risultati.length<8;i++)for(let j=i+1;j<items.length&&risultati.length<8;j++)if(Math.abs(valore(items[i])+valore(items[j])-target)<=tolleranza)aggiungi([i,j]);
+  for(let i=0;i<items.length&&risultati.length<8;i++){
+    const richiesti=new Map();
+    for(let j=i+1;j<items.length;j++){
+      const necessario=target-valore(items[i])-valore(items[j]);
+      const cent=Math.round(necessario*100);
+      for(let d=-Math.ceil(tolleranza*100);d<=Math.ceil(tolleranza*100);d++){
+        const k=richiesti.get(cent+d);
+        if(k!=null&&k!==j){aggiungi([i,k,j].sort((a,b)=>a-b));break;}
+      }
+      richiesti.set(Math.round(valore(items[j])*100),j);
+      if(risultati.length>=8)break;
+    }
+  }
+  return risultati;
+}
 function confrontaEstratto(ops,anno,mese){
-  const banca=ops.filter(o=>o.anno===anno&&o.mese===mese),app=operazioniCassaAttese(anno,mese),usati=new Set(),abbinati=[];
-  app.forEach(a=>{
-    let best=-1,bestScore=Infinity;
-    banca.forEach((b,i)=>{if(usati.has(i)||Math.sign(b.importo)!==a.segno)return;const d=Math.abs(Math.abs(b.importo)-a.importo);if(d>Math.max(1,a.importo*.015))return;const score=d-similaritaDescrizione(a.descrizione,b.descrizione)*2;if(score<bestScore){best=i;bestScore=score;}});
-    if(best>=0){usati.add(best);abbinati.push({app:a,banca:banca[best]});}
-  });
-  const appIds=new Set(abbinati.map(x=>x.app.id));
-  const nonApp=app.filter(a=>!appIds.has(a.id)),nonBanca=banca.filter((_,i)=>!usati.has(i));
-  return {anno,mese,banca,app,abbinati,nonApp,nonBanca,pending:banca.filter(o=>o.pending),totBanca:banca.reduce((s,o)=>s+o.importo,0),totApp:app.reduce((s,o)=>s+o.segno*o.importo,0)};
+  const banca=ops.filter(o=>o.anno===anno&&o.mese===mese),app=operazioniCassaAttese(anno,mese);
+  const bancaEntrate=banca.filter(o=>o.importo>0),bancaUscite=banca.filter(o=>o.importo<0);
+  const appEntrate=app.filter(o=>o.segno>0),appUscite=app.filter(o=>o.segno<0);
+  const totBancaEntrate=bancaEntrate.reduce((s,o)=>s+o.importo,0),totBancaUscite=bancaUscite.reduce((s,o)=>s+Math.abs(o.importo),0);
+  const totAppEntrate=appEntrate.reduce((s,o)=>s+o.importo,0),totAppUscite=appUscite.reduce((s,o)=>s+o.importo,0);
+  const diffEntrate=totBancaEntrate-totAppEntrate,diffUscite=totBancaUscite-totAppUscite;
+  const cerca=(diff,bancaLista,appLista,bancaValore,appValore)=>{
+    if(Math.abs(diff)<=1)return [];
+    return diff>0
+      ? trovaResponsabiliScostamento(bancaLista,Math.abs(diff),bancaValore).map(r=>({...r,origine:"banca"}))
+      : trovaResponsabiliScostamento(appLista,Math.abs(diff),appValore).map(r=>({...r,origine:"app"}));
+  };
+  return {anno,mese,banca,app,pending:banca.filter(o=>o.pending),totBancaEntrate,totBancaUscite,totAppEntrate,totAppUscite,diffEntrate,diffUscite,
+    responsabiliEntrate:cerca(diffEntrate,bancaEntrate,appEntrate,o=>o.importo,o=>o.importo),
+    responsabiliUscite:cerca(diffUscite,bancaUscite,appUscite,o=>Math.abs(o.importo),o=>o.importo)};
 }
 
 function renderAnalisiEstratto(){
   const a=state.analisiEstratto;if(!a)return '<div class="empty">Nessun estratto analizzato.</div>';
   if(a.errore)return `<div class="warn-box">${escapeHtml(a.errore)}</div>`;
   if(a.anno!==state.selYear||a.mese!==state.selMonth)return '<div class="empty">Nessun estratto analizzato per questo mese.</div>';
-  const diff=a.totBanca-a.totApp;
-  const lista=(titolo,arr,lato)=>`<div><b style="font-size:12px">${titolo} (${arr.length})</b><div class="statement-list">${arr.length?arr.slice(0,40).map(x=>{const o=lato==="app"?x:x;const val=lato==="app"?o.segno*o.importo:o.importo;return `<div class="statement-row"><span>${escapeHtml(o.descrizione||o.riga||"Operazione")}</span><b style="color:${val>=0?GREEN:RUST}">${val>=0?'+':''}${eur(val)}</b></div>`;}).join(''):'<div class="empty" style="padding:10px 0">Nessuna</div>'}</div></div>`;
+  const okEntrate=Math.abs(a.diffEntrate)<=1,okUscite=Math.abs(a.diffUscite)<=1,tuttoOk=okEntrate&&okUscite;
+  const rigaTotale=(titolo,banca,app,diff,ok)=>`<tr><td style="font-weight:700">${titolo}</td><td style="font-family:ui-monospace,monospace">${eur(banca)}</td><td style="font-family:ui-monospace,monospace">${eur(app)}</td><td style="font-family:ui-monospace,monospace;color:${ok?GREEN:RUST};font-weight:700">${diff>0?'+':''}${eur(diff)}</td><td><span class="esito" style="color:${ok?GREEN:RUST}">${ok?'✓ OK':'⚠ Verifica'}</span></td></tr>`;
+  const candidati=(titolo,arr,diff)=>{
+    if(Math.abs(diff)<=1)return '';
+    if(!arr.length)return `<div class="warn-box"><b>${titolo}</b><br>Nessun importo singolo o combinazione fino a 3 movimenti spiega esattamente lo scostamento di ${eur(Math.abs(diff))}.</div>`;
+    return `<div><b style="font-size:12px">${titolo}</b><div class="statement-list">${arr.map(r=>`<div class="statement-row"><span>${r.items.map(o=>escapeHtml(o.descrizione||o.riga||"Operazione")).join(' + ')} <small style="color:${MUTED}">(${r.origine==='banca'?'nel PDF':'nell’app'})</small></span><b style="color:${RUST}">${eur(r.totale)}</b></div>`).join('')}</div></div>`;
+  };
   return `<div class="statement-result">
-    <div class="statement-summary"><div class="statement-kpi"><small>Movimenti banca rilevati</small><b>${a.banca.length}${a.pending?.length?` <span style="font-size:10px;color:${GOLD}">(${a.pending.length} pendenti)</span>`:''}</b></div><div class="statement-kpi"><small>Abbinati automaticamente</small><b style="color:${GREEN}">${a.abbinati.length}</b></div><div class="statement-kpi"><small>Scostamento netto</small><b style="color:${Math.abs(diff)<=1?GREEN:RUST}">${eur(diff)}</b></div></div>
-    ${Math.abs(diff)<=1?'<div style="color:'+GREEN+';font-size:12px;font-weight:700">✓ Totali coerenti entro 1 euro.</div>':'<div class="warn-box">Lo scostamento deriva probabilmente dalle operazioni non abbinate qui sotto. Controlla prima quelle presenti in banca ma assenti nell’app.</div>'}
-    ${lista("In banca ma non nell’app",a.nonBanca,"banca")}
-    ${lista("Nell’app ma non trovati in banca",a.nonApp,"app")}
+    <div class="statement-summary"><div class="statement-kpi"><small>Movimenti banca rilevati</small><b>${a.banca.length}${a.pending?.length?` <span style="font-size:10px;color:${GOLD}">(${a.pending.length} pendenti)</span>`:''}</b></div><div class="statement-kpi"><small>Controllo entrate</small><b style="color:${okEntrate?GREEN:RUST}">${okEntrate?'✓ Coerenti':eur(a.diffEntrate)}</b></div><div class="statement-kpi"><small>Controllo uscite</small><b style="color:${okUscite?GREEN:RUST}">${okUscite?'✓ Coerenti':eur(a.diffUscite)}</b></div></div>
+    <table><thead><tr><th></th><th>PDF banca</th><th>App</th><th>Differenza</th><th>Esito</th></tr></thead><tbody>${rigaTotale('Entrate',a.totBancaEntrate,a.totAppEntrate,a.diffEntrate,okEntrate)}${rigaTotale('Uscite',a.totBancaUscite,a.totAppUscite,a.diffUscite,okUscite)}</tbody></table>
+    ${tuttoOk?'<div style="color:'+GREEN+';font-size:12px;font-weight:700">✓ Entrate e uscite coincidono entro 1 euro. Nessun confronto movimento per movimento necessario.</div>':'<div class="warn-box">C’è uno scostamento: sotto trovi solo i movimenti singoli o le piccole combinazioni che potrebbero spiegarlo, calcolati sulla differenza.</div>'}
+    ${candidati('Possibili responsabili dello scostamento entrate',a.responsabiliEntrate,a.diffEntrate)}
+    ${candidati('Possibili responsabili dello scostamento uscite',a.responsabiliUscite,a.diffUscite)}
     <div class="sub">Analisi automatica locale: nessun contenuto del PDF viene salvato o inviato a Firestore. I PDF scansionati come immagini richiedono OCR e potrebbero non essere leggibili.</div>
   </div>`;
 }
