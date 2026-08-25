@@ -231,7 +231,6 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
 const TX_SEED = []; // Dati reali rimossi dal sorgente pubblico: caricati solo da Firestore autenticato.
 const BG_SEED = []; // Budget reali rimossi dal sorgente pubblico: caricati solo da Firestore autenticato.
@@ -768,15 +767,9 @@ function datiObiettiviRisparmio(){
   if (!saldi.length) return {saldo:null, media:null, periodo:null, obiettivi:[]};
   const [periodo, ultimo] = saldi[saldi.length-1];
   const [annoSaldo,meseSaldo] = periodo.split("-").map(Number);
-  const oggi=new Date(), ultimoConcluso=shiftMonth(oggi.getFullYear(),oggi.getMonth()+1,-1);
-  const indiceSaldo=annoSaldo*12+meseSaldo, indiceConcluso=ultimoConcluso.anno*12+ultimoConcluso.mese;
-  const fineMedia=indiceSaldo<indiceConcluso?{anno:annoSaldo,mese:meseSaldo}:ultimoConcluso;
-  const risparmi = [];
-  for(let i=0;i<6;i++){
-    const p=shiftMonth(fineMedia.anno,fineMedia.mese,-i);
-    risparmi.push(riepilogoCassaMese(p.anno,p.mese).risparmio);
-  }
-  const media = risparmi.reduce((s,v)=>s+v,0)/risparmi.length;
+  // La barra obiettivi usa esattamente il "Risparmio" mostrato dall'app nei
+  // sei mesi conclusi, senza rettifiche di cassa per Amex, mutuo o tredicesima.
+  const media = paceMedioRisparmioRecente(6);
   const saldo = Number(ultimo.saldo);
   const obiettivi = (state.obiettiviRisparmio||[]).map(valore=>{
     const raggiunto = saldo>=valore;
@@ -799,7 +792,7 @@ function renderObiettiviRisparmio(){
     return `<div class="goal-marker ${o.raggiunto?'done':''}" style="left:${pos}%"><div class="goal-dot"></div><b>${eur(o.valore)}</b><span>${stato}</span></div>`;
   }).join('');
   const prossimo=d.obiettivi.find(o=>!o.raggiunto), mancano=prossimo?Math.max(0,prossimo.valore-d.saldo):0;
-  return `<div class="card goals-card"><div class="goals-head"><div><h3>&#127919; Obiettivi liquidità</h3><p class="sub" style="margin:4px 0 0">Media 6 mesi: <b style="color:${d.media>=0?GREEN:RUST}">${eur(d.media)}/mese</b> · saldo aggiornato a ${d.periodo}</p></div><div style="text-align:right"><button class="goals-edit" id="toggleGoalsEditor">&#9998; Modifica</button>${prossimo?`<div class="sub" style="margin:4px 0 0">Al prossimo mancano <b style="color:${NAVY}">${eur(mancano)}</b></div>`:'<div class="sub" style="color:'+GREEN+';margin:4px 0 0"><b>Tutti raggiunti</b></div>'}</div></div><div class="goal-track-wrap"><div class="goal-track"><div class="goal-track-fill" style="width:${avanzamento}%"></div></div>${markers}</div>${editor}</div>`;
+  return `<div class="card goals-card"><div class="goals-head"><div><h3>&#127919; Obiettivi liquidità</h3><p class="sub" style="margin:4px 0 0">Media risparmio app, ultimi 6 mesi conclusi: <b style="color:${d.media>=0?GREEN:RUST}">${eur(d.media)}/mese</b> · saldo aggiornato a ${d.periodo}</p></div><div style="text-align:right"><button class="goals-edit" id="toggleGoalsEditor">&#9998; Modifica</button>${prossimo?`<div class="sub" style="margin:4px 0 0">Al prossimo mancano <b style="color:${NAVY}">${eur(mancano)}</b></div>`:'<div class="sub" style="color:'+GREEN+';margin:4px 0 0"><b>Tutti raggiunti</b></div>'}</div></div><div class="goal-track-wrap"><div class="goal-track"><div class="goal-track-fill" style="width:${avanzamento}%"></div></div>${markers}</div>${editor}</div>`;
 }
 
 // Calcola il ritmo medio di risparmio usando SOLO mesi effettivamente conclusi
@@ -1857,8 +1850,7 @@ function similaritaDescrizione(a,b){
   if(!A.size||!B.size)return 0;let comuni=0;A.forEach(x=>{if(B.has(x))comuni++;});return comuni/Math.max(A.size,B.size);
 }
 async function estraiOperazioniPdf(file){
-  if(!window.pdfjsLib)throw new Error("Lettore PDF non disponibile. Ricarica la pagina e riprova.");
-  pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  const pdfjsLib=await caricaPdfJs();
   const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
   const righe=[];
   for(let p=1;p<=pdf.numPages;p++){
@@ -1884,6 +1876,13 @@ async function estraiOperazioniPdf(file){
     ops.push({giorno:Number(dm[1]),mese:Number(dm[2]),anno,importo,descrizione:r.replace(dm[0],"").replace(token,"").trim(),riga:r,pending:/da contabilizzare/i.test(r)});
   });
   return {ops,righeTotali:righe.length,pagine:pdf.numPages};
+}
+let pdfjsPromise=null;
+async function caricaPdfJs(){
+  if(!pdfjsPromise)pdfjsPromise=import("./pdf.mjs");
+  const lib=await pdfjsPromise;
+  lib.GlobalWorkerOptions.workerSrc="./pdf.worker.mjs";
+  return lib;
 }
 function confrontaEstratto(ops,anno,mese){
   const banca=ops.filter(o=>o.anno===anno&&o.mese===mese),app=operazioniCassaAttese(anno,mese),usati=new Set(),abbinati=[];
