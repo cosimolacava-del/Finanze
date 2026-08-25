@@ -1849,12 +1849,29 @@ function similaritaDescrizione(a,b){
   const A=new Set(normalizzaTestoMatch(a).split(" ").filter(x=>x.length>2&&!stop.has(x))),B=new Set(normalizzaTestoMatch(b).split(" ").filter(x=>x.length>2&&!stop.has(x)));
   if(!A.size||!B.size)return 0;let comuni=0;A.forEach(x=>{if(B.has(x))comuni++;});return comuni/Math.max(A.size,B.size);
 }
+async function contenutoTestoPaginaCompat(page){
+  // Safari/iOS espone ReadableStream.getReader(), ma in alcune versioni non
+  // l'iteratore asincrono usato internamente da PDF.js getTextContent().
+  // Leggere direttamente i blocchi dello stream evita l'errore senza inviare
+  // il PDF fuori dal dispositivo.
+  const reader=page.streamTextContent().getReader(),items=[];
+  try{
+    while(true){
+      const blocco=await reader.read();
+      if(blocco.done)break;
+      if(blocco.value&&Array.isArray(blocco.value.items))items.push(...blocco.value.items);
+    }
+  }finally{
+    if(reader.releaseLock)reader.releaseLock();
+  }
+  return {items};
+}
 async function estraiOperazioniPdf(file){
   const pdfjsLib=await caricaPdfJs();
   const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
   const righe=[];
   for(let p=1;p<=pdf.numPages;p++){
-    const page=await pdf.getPage(p),content=await page.getTextContent(),byY={};
+    const page=await pdf.getPage(p),content=await contenutoTestoPaginaCompat(page),byY={};
     content.items.forEach(it=>{const y=Math.round((it.transform&&it.transform[5])||0);(byY[y]=byY[y]||[]).push(it);});
     Object.keys(byY).sort((a,b)=>b-a).forEach(y=>righe.push(byY[y].sort((a,b)=>(a.transform?.[4]||0)-(b.transform?.[4]||0)).map(x=>x.str).join(" ").replace(/\s+/g," ").trim()));
   }
