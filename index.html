@@ -1866,7 +1866,7 @@ async function contenutoTestoPaginaCompat(page){
   }
   return {items};
 }
-async function estraiOperazioniPdf(file){
+async function estraiOperazioniPdf(file,annoDefault,meseDefault){
   const pdfjsLib=await caricaPdfJs();
   const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
   const righe=[];
@@ -1876,21 +1876,28 @@ async function estraiOperazioniPdf(file){
     Object.keys(byY).sort((a,b)=>b-a).forEach(y=>righe.push(byY[y].sort((a,b)=>(a.transform?.[4]||0)-(b.transform?.[4]||0)).map(x=>x.str).join(" ").replace(/\s+/g," ").trim()));
   }
   const ops=[];
-  const dataRx=/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/;
-  // Consideriamo solo importi seguiti da simbolo/valuta: evita di scambiare
-  // orari, numeri pratica e date presenti nelle descrizioni BPER per importi.
-  const impRx=/[+\-]?\s*(?:\d{1,3}(?:\.\d{3})*|\d+)\,\d{2}\s*(?:€|EUR)|[+\-]?\s*(?:\d{1,3}(?:,\d{3})*|\d+)\.\d{2}\s*(?:€|EUR)/gi;
+  const dataRx=/(\d{4})-(\d{1,2})-(\d{1,2})|(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?/;
+  // Accetta sia importi con valuta sia il formato BPER senza simbolo (es.
+  // -49,90). Le due cifre decimali obbligatorie evitano date, codici e orari.
+  const impRx=/[+\-]?\s*(?:\d{1,3}(?:\.\d{3})*|\d+)\,\d{2}\s*(?:€|EUR)?|[+\-]?\s*(?:\d{1,3}(?:,\d{3})*|\d+)\.\d{2}\s*(?:€|EUR)?/gi;
   righe.forEach(r=>{
-    const dm=r.match(dataRx);if(!dm||dm.index>2)return;
-    const dopoData=r.slice(dm.index+dm[0].length,dm.index+dm[0].length+1);if(dopoData==="/")return;
-    const tokens=r.match(impRx)||[];if(!tokens.length)return;
+    const dm=r.match(dataRx);if(!dm||dm.index>24)return;
+    let giorno,mese,anno;
+    if(dm[1]){anno=Number(dm[1]);mese=Number(dm[2]);giorno=Number(dm[3]);}
+    else{giorno=Number(dm[4]);mese=Number(dm[5]);anno=dm[6]?Number(dm[6].length===2?"20"+dm[6]:dm[6]):Number(annoDefault);}
+    if(!(giorno>=1&&giorno<=31&&mese>=1&&mese<=12&&anno>=2000))return;
+    if(!dm[6]&&meseDefault&&mese!==Number(meseDefault))return;
+    // Elimina tutte le date dalla riga prima di cercare gli importi: in molti
+    // estratti compaiono sia data contabile sia data valuta.
+    const senzaDate=r.replace(/\d{4}-\d{1,2}-\d{1,2}/g," ").replace(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}/g," ").replace(/\d{1,2}\/\d{1,2}(?![\/\d])/g," ");
+    const tokens=senzaDate.match(impRx)||[];if(!tokens.length)return;
     let token=tokens[tokens.length-1],importo=numeroItaliano(token);if(importo===null||Math.abs(importo)<0.01)return;
-    if(!/^[+\-]/.test(token.trim())){
-      const positivo=/accredito|stipend|emolument|entrata|rimborso|bonifico ricevuto|versamento/i.test(r);
+    const tokenPulito=token.trim();
+    if(!/^[+\-]/.test(tokenPulito)){
+      const positivo=/accredito|stipend|emolument|entrata|rimborso|bonifico ricevuto|versamento|incasso|interessi creditori/i.test(r);
       importo=positivo?Math.abs(importo):-Math.abs(importo);
     }
-    const anno=Number(dm[3].length===2?"20"+dm[3]:dm[3]);
-    ops.push({giorno:Number(dm[1]),mese:Number(dm[2]),anno,importo,descrizione:r.replace(dm[0],"").replace(token,"").trim(),riga:r,pending:/da contabilizzare/i.test(r)});
+    ops.push({giorno,mese,anno,importo,descrizione:r.replace(dm[0],"").replace(token,"").trim(),riga:r,pending:/da contabilizzare/i.test(r)});
   });
   return {ops,righeTotali:righe.length,pagine:pdf.numPages};
 }
@@ -3004,7 +3011,7 @@ function attachHandlers(){
       if(file.size>20*1024*1024){alert("Il PDF supera 20 MB.");return;}
       analyzeBtn.disabled=true;status.textContent="Lettura e confronto in corso…";
       try{
-        const estratto=await estraiOperazioniPdf(file);
+        const estratto=await estraiOperazioniPdf(file,state.selYear,state.selMonth);
         if(!estratto.ops.length)throw new Error("Non ho trovato operazioni leggibili. Il PDF potrebbe essere una scansione oppure usare un formato non riconosciuto.");
         state.analisiEstratto=confrontaEstratto(estratto.ops,state.selYear,state.selMonth);
         state.analisiEstratto.pagine=estratto.pagine;
