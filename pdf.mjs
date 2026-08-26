@@ -1,28 +1,32 @@
 // Wrapper della libreria PDF.js originale.
-// Mantiene le API PDF.js ma ripulisce il testo BPER PRIMA che il parser dell'app
-// lo analizzi. Il parser storico accettava anche date senza anno con il punto
-// (es. 3.96): questo faceva scambiare importi come 3.965,98 e orari come
-// 03.43.13 per nuove date/movimenti.
+// Per gli estratti BPER lascia al parser dell'app solo le vere righe movimento.
 export * from "./pdf-lib-original.mjs";
 import * as PDFJS from "./pdf-lib-original.mjs";
 export default PDFJS;
 
-function sanitizePdfText(s=""){
-  let v=String(s);
+const fullSlashDate=s=>/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(String(s||"").trim());
 
-  // Data+ora dentro le descrizioni carta BPER, es. 25.08.2026/03.43.13.
-  v=v.replace(/\b\d{1,2}\.\d{1,2}\.\d{4}\/\d{1,2}\.\d{2}\.\d{2}\b/g," ");
-  // Data contabile ripetuta nella descrizione, es. "del 20.08.2026".
-  v=v.replace(/\b(?:del\s+)?\d{1,2}\.\d{1,2}\.\d{4}\b/gi," ");
-  // Se PDF.js spezza data e ora in item separati, elimina anche l'ora residua.
-  v=v.replace(/\/?\b\d{1,2}\.\d{2}\.\d{2}\b/g," ");
+function cleanBperChunk(value){
+  if(!value||!Array.isArray(value.items)||!value.items.length)return value;
+  const rows=new Map();
+  value.items.forEach(it=>{
+    const y=Math.round((it.transform&&it.transform[5])||0);
+    if(!rows.has(y))rows.set(y,[]);
+    rows.get(y).push({it,x:(it.transform&&it.transform[4])||0});
+  });
+  const ordered=[...rows.values()].map(r=>r.sort((a,b)=>a.x-b.x));
+  const texts=ordered.map(r=>r.map(z=>String(z.it.str||"")).join(" ").replace(/\s+/g," ").trim());
+  const hasHeader=texts.some(t=>/Descrizione/i.test(t)&&/Entrate/i.test(t)&&/Uscite/i.test(t));
+  const leftDates=ordered.filter(r=>r.some(z=>z.x<90&&fullSlashDate(z.it.str))).length;
+  if(!(hasHeader||leftDates>=2))return value;
 
-  // CRITICO: 3.965,98 veniva interpretato dal vecchio dataRx come una data
-  // "3.96" (anno opzionale), generando movimenti fantasma. Togliere il separatore
-  // delle migliaia non cambia il valore monetario: 3965,98 viene letto correttamente.
-  v=v.replace(/(?<!\d)([+\-]?\d{1,3}(?:\.\d{3})+),(\d{2})(?!\d)/g,(m,intPart,dec)=>intPart.replace(/\./g,"")+","+dec);
-
-  return v.replace(/\s+/g," ").trim();
+  ordered.forEach(r=>{
+    const first=r.find(z=>String(z.it.str||"").trim());
+    if(!first)return;
+    const movement=first.x<90&&fullSlashDate(first.it.str);
+    if(!movement)r.forEach(z=>{z.it.str="";});
+  });
+  return value;
 }
 
 function wrapTextStream(stream){
@@ -32,11 +36,8 @@ function wrapTextStream(stream){
       try{
         while(true){
           const {value,done}=await reader.read();
-          if(done) break;
-          if(value && Array.isArray(value.items)){
-            value.items=value.items.map(it=>({...it,str:sanitizePdfText(it.str)}));
-          }
-          controller.enqueue(value);
+          if(done)break;
+          controller.enqueue(cleanBperChunk(value));
         }
         controller.close();
       }catch(e){controller.error(e);}
@@ -45,50 +46,18 @@ function wrapTextStream(stream){
     cancel(reason){try{return stream.cancel(reason);}catch(_){}}
   });
 }
+function wrapPage(page){return new Proxy(page,{get(target,prop,receiver){if(prop==="streamTextContent")return(...args)=>wrapTextStream(target.streamTextContent(...args));const v=Reflect.get(target,prop,receiver);return typeof v==="function"?v.bind(target):v;}});}
+function wrapPdf(pdf){return new Proxy(pdf,{get(target,prop,receiver){if(prop==="getPage")return async n=>wrapPage(await target.getPage(n));const v=Reflect.get(target,prop,receiver);return typeof v==="function"?v.bind(target):v;}});}
+export function getDocument(...args){const task=PDFJS.getDocument(...args);const wrappedPromise=task.promise.then(wrapPdf);return new Proxy(task,{get(target,prop,receiver){if(prop==="promise")return wrappedPromise;const v=Reflect.get(target,prop,receiver);return typeof v==="function"?v.bind(target):v;}});}
 
-function wrapPage(page){
-  return new Proxy(page,{
-    get(target,prop,receiver){
-      if(prop==="streamTextContent") return (...args)=>wrapTextStream(target.streamTextContent(...args));
-      const v=Reflect.get(target,prop,receiver);
-      return typeof v==="function" ? v.bind(target) : v;
-    }
-  });
-}
-
-function wrapPdf(pdf){
-  return new Proxy(pdf,{
-    get(target,prop,receiver){
-      if(prop==="getPage") return async n=>wrapPage(await target.getPage(n));
-      const v=Reflect.get(target,prop,receiver);
-      return typeof v==="function" ? v.bind(target) : v;
-    }
-  });
-}
-
-// Export esplicito che prevale sul re-export della libreria originale.
-export function getDocument(...args){
-  const task=PDFJS.getDocument(...args);
-  const wrappedPromise=task.promise.then(wrapPdf);
-  return new Proxy(task,{
-    get(target,prop,receiver){
-      if(prop==="promise") return wrappedPromise;
-      const v=Reflect.get(target,prop,receiver);
-      return typeof v==="function" ? v.bind(target) : v;
-    }
-  });
-}
-
-// La ricerca smart resta disponibile; il confronto principale è però affidabile
-// solo dopo che il PDF è stato ripulito dai falsi movimenti.
+// Ricerca smart dei possibili responsabili dello scostamento.
 const norm=(s="")=>String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\b(operazione|carta|contabilizzato|pagamento|addebito|sdd|rid|sepa|ita|it|eur)\b/g," ").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
 const safeVal=(o,valore)=>{const n=Number(valore(o));return Number.isFinite(n)?Math.abs(n):0;};
 function motivoItem(o){const s=norm(o.descrizione||o.riga||"");const m=[];if(o.pending)m.push("movimento ancora da contabilizzare");if(/american express|amex/.test(s))m.push("addebito carta aggregato: possibile doppio conteggio");if(/paypal/.test(s))m.push("pagamento intermediato: verifica eventuale doppio conteggio");if(/commission/.test(s))m.push("commissione separata dall'addebito principale");return m;}
 function trovaResponsabiliSmart(lista,target,valore){
   target=Math.abs(Number(target)||0);if(!target||!Array.isArray(lista)||!lista.length)return[];
   const exact=Math.max(.75,target*.001),good=Math.max(3,target*.01);
-  const raw=lista.map((o,i)=>({o,i,v:safeVal(o,valore),k:norm(o.descrizione||o.riga||"")})).filter(x=>x.v>.001);
-  const out=[],seen=new Set();
+  const raw=lista.map((o,i)=>({o,i,v:safeVal(o,valore),k:norm(o.descrizione||o.riga||"")})).filter(x=>x.v>.001),out=[],seen=new Set();
   const add=(arr,reason="")=>{const key=arr.map(x=>x.i).sort((a,b)=>a-b).join("-");if(!arr.length||seen.has(key))return;seen.add(key);const totale=arr.reduce((s,x)=>s+x.v,0),residuo=Math.abs(target-totale),rel=residuo/target;const conf=residuo<=exact?"molto probabile":(residuo<=good||rel<=.03?"probabile":"possibile");const why=[...new Set(arr.flatMap(x=>motivoItem(x.o)).concat(reason?[reason]:[]))];const suffix=` [${conf}; residuo ${residuo.toFixed(2).replace('.',',')} €${why.length?'; '+why.join('; '):''}]`;out.push({items:arr.map((x,j)=>({...x.o,descrizione:(x.o.descrizione||x.o.riga||"Operazione")+(j===0?suffix:"")})),totale,residuo,score:(conf==="molto probabile"?0:conf==="probabile"?1:2)*100000+residuo});};
   raw.forEach(x=>{if(Math.abs(target-x.v)<=Math.max(good,target*.08))add([x],"importo singolo vicino allo scostamento");});
   const pool=[...raw].sort((a,b)=>Math.abs(target-a.v)-Math.abs(target-b.v)).slice(0,80);
