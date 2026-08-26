@@ -1,44 +1,50 @@
 // Wrapper della libreria PDF.js originale.
-// Per gli estratti BPER lascia al parser dell'app solo le vere righe movimento.
+// Per gli estratti BPER ricostruisce l'INTERA pagina prima di filtrare le righe,
+// così il risultato non dipende da come PDF.js spezza il testo in chunk di stream.
 export * from "./pdf-lib-original.mjs";
 import * as PDFJS from "./pdf-lib-original.mjs";
 export default PDFJS;
 
 const fullSlashDate=s=>/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(String(s||"").trim());
 
-function cleanBperChunk(value){
-  if(!value||!Array.isArray(value.items)||!value.items.length)return value;
+function filtraPaginaBper(items){
+  if(!Array.isArray(items)||!items.length)return items||[];
   const rows=new Map();
-  value.items.forEach(it=>{
+  items.forEach(it=>{
     const y=Math.round((it.transform&&it.transform[5])||0);
     if(!rows.has(y))rows.set(y,[]);
-    rows.get(y).push({it,x:(it.transform&&it.transform[4])||0});
+    rows.get(y).push({it,x:Number((it.transform&&it.transform[4])||0)});
   });
-  const ordered=[...rows.values()].map(r=>r.sort((a,b)=>a.x-b.x));
-  const texts=ordered.map(r=>r.map(z=>String(z.it.str||"")).join(" ").replace(/\s+/g," ").trim());
-  const hasHeader=texts.some(t=>/Descrizione/i.test(t)&&/Entrate/i.test(t)&&/Uscite/i.test(t));
-  const leftDates=ordered.filter(r=>r.some(z=>z.x<90&&fullSlashDate(z.it.str))).length;
-  if(!(hasHeader||leftDates>=2))return value;
+  const ordered=[...rows.entries()]
+    .sort((a,b)=>b[0]-a[0])
+    .map(([y,r])=>({y,r:r.sort((a,b)=>a.x-b.x)}));
+  const texts=ordered.map(row=>row.r.map(z=>String(z.it.str||"")).join(" ").replace(/\s+/g," ").trim());
+  const hasBperHeader=texts.some(t=>/Data operazione/i.test(t)&&/Descrizione/i.test(t)) || texts.some(t=>/Entrate/i.test(t)&&/Uscite/i.test(t));
+  const movementRows=ordered.filter(row=>row.r.some(z=>z.x<110&&fullSlashDate(z.it.str)));
+  const looksBper=hasBperHeader || movementRows.length>=2;
+  if(!looksBper)return items;
 
-  ordered.forEach(r=>{
-    const first=r.find(z=>String(z.it.str||"").trim());
-    if(!first)return;
-    const movement=first.x<90&&fullSlashDate(first.it.str);
-    if(!movement)r.forEach(z=>{z.it.str="";});
-  });
-  return value;
+  const keep=new Set();
+  movementRows.forEach(row=>row.r.forEach(z=>keep.add(z.it)));
+  // Conserva solo le vere righe movimento. Il parser principale ricostruirà
+  // nuovamente le righe per coordinata Y e quindi vedrà una sola operazione per data.
+  return items.filter(it=>keep.has(it));
 }
 
 function wrapTextStream(stream){
   return new ReadableStream({
     async start(controller){
       const reader=stream.getReader();
+      const chunks=[];
       try{
         while(true){
           const {value,done}=await reader.read();
           if(done)break;
-          controller.enqueue(cleanBperChunk(value));
+          if(value&&Array.isArray(value.items))chunks.push(value);
         }
+        const allItems=chunks.flatMap(c=>c.items||[]);
+        const filtered=filtraPaginaBper(allItems);
+        controller.enqueue({items:filtered,styles:Object.assign({},...chunks.map(c=>c.styles||{})),lang:chunks.find(c=>c.lang)?.lang||null});
         controller.close();
       }catch(e){controller.error(e);}
       finally{try{reader.releaseLock&&reader.releaseLock();}catch(_){}}
