@@ -1,6 +1,5 @@
 // Wrapper della libreria PDF.js originale.
-// Mantiene tutte le API PDF.js e aggiunge una riconciliazione più intelligente
-// degli scostamenti tra estratto conto e movimenti registrati nell'app.
+// Mantiene tutte le API PDF.js e aggiunge correzioni locali al parser/riconciliazione.
 export * from "./pdf-lib-original.mjs";
 import * as PDFJS from "./pdf-lib-original.mjs";
 export default PDFJS;
@@ -59,10 +58,8 @@ function trovaResponsabiliSmart(lista,target,valore){
     candidates.push({items,totale,residuo,conf,score:(conf==="molto probabile"?0:conf==="probabile"?1:2)*100000+residuo});
   };
 
-  // 1) Singoli importi: anche vicini, non soltanto identici.
   raw.forEach(x=>{ if(Math.abs(target-x.v)<=Math.max(tollGood,target*0.08)) add([x],"importo singolo vicino allo scostamento"); });
 
-  // 2) Duplicati plausibili: stesso importo + descrizione simile nello stesso periodo.
   for(let i=0;i<raw.length;i++) for(let j=i+1;j<raw.length;j++){
     const a=raw[i],b=raw[j];
     const sameAmount=Math.abs(a.v-b.v)<=0.02;
@@ -73,26 +70,24 @@ function trovaResponsabiliSmart(lista,target,valore){
     }
   }
 
-  // 3) Coppie. Limitiamo ai 80 importi più promettenti per evitare esplosioni combinatorie.
   const pool=[...raw].sort((a,b)=>Math.abs(target-a.v)-Math.abs(target-b.v)).slice(0,80);
   for(let i=0;i<pool.length;i++) for(let j=i+1;j<pool.length;j++){
     const sum=pool[i].v+pool[j].v;
     if(Math.abs(target-sum)<=Math.max(tollGood,target*0.05)) add([pool[i],pool[j]],"somma di due movimenti vicina allo scostamento");
   }
 
-  // 4) Terne: cerchiamo il terzo importo con indice per centesimi anziché provare tutte le combinazioni.
   const cents=new Map();
   pool.forEach(x=>{const c=Math.round(x.v*100); if(!cents.has(c)) cents.set(c,[]); cents.get(c).push(x);});
   const targetC=Math.round(target*100), deltaC=Math.round(Math.max(tollGood,target*0.03)*100);
   for(let i=0;i<pool.length;i++) for(let j=i+1;j<pool.length;j++){
     const need=targetC-Math.round((pool[i].v+pool[j].v)*100);
-    for(let dc=-deltaC;dc<=deltaC;dc+=Math.max(1,Math.floor(deltaC/12)||1)){
+    const step=Math.max(1,Math.floor(deltaC/12)||1);
+    for(let dc=-deltaC;dc<=deltaC;dc+=step){
       const arr=cents.get(need+dc); if(!arr) continue;
       for(const z of arr){ if(z.i===pool[i].i||z.i===pool[j].i) continue; add([pool[i],pool[j],z],"somma di tre movimenti vicina allo scostamento"); }
     }
   }
 
-  // 5) Gruppi per descrizione/esercente: utile per piccole spese ripetute o rate.
   const groups=new Map();
   raw.forEach(x=>{if(!x.k)return; const g=x.k.split(" ").slice(0,3).join(" "); if(!g)return; if(!groups.has(g))groups.set(g,[]); groups.get(g).push(x);});
   groups.forEach(arr=>{
@@ -101,11 +96,35 @@ function trovaResponsabiliSmart(lista,target,valore){
     if(Math.abs(target-sum)<=Math.max(tollGood,target*0.08)) add(arr,"gruppo di movimenti con descrizione simile");
   });
 
-  // Mostra pochi suggerimenti realmente utili, ordinati per confidenza e residuo.
   candidates.sort((a,b)=>a.score-b.score || a.items.length-b.items.length);
   return candidates.slice(0,8).map(({items,totale})=>({items,totale}));
 }
 
-// La funzione originale è globale perché dichiarata nello script principale.
-// Sovrascriverla qui permette di migliorare la riconciliazione senza toccare i dati utente.
+// PDF BPER: PDF.js può spezzare le descrizioni su righe autonome. Quelle righe
+// contengono spesso la data dell'operazione carta (es. 25.08.2026/03.43.13):
+// il vecchio parser la scambiava per una nuova operazione e interpretava anche
+// parti dell'orario come importi. Risultato: 129 movimenti invece dei 45 reali
+// e uscite fortemente gonfiate.
+// Le vere righe BPER iniziano invece nella colonna "Data operazione" con
+// gg/mm/aaaa. Se nello stesso PDF vediamo sia righe vere sia righe spurie,
+// teniamo esclusivamente le righe che iniziano con quella data.
+function pulisciOperazioniBper(ops){
+  if(!Array.isArray(ops) || !ops.length) return ops||[];
+  const vere=ops.filter(o=>/^\s*\d{1,2}\/\d{1,2}\/\d{4}\b/.test(String(o.riga||"")));
+  const sospette=ops.filter(o=>/^\s*\d{1,2}[.\-]\d{1,2}[.\-]\d{4}(?:\/|\s)/.test(String(o.riga||"")));
+  // Attiva la correzione solo quando il pattern è chiaramente quello BPER,
+  // così non tocchiamo estratti di altre banche che usano date con punti.
+  if(vere.length>=5 && (sospette.length>=2 || ops.length>vere.length*1.15)) return vere;
+  return ops;
+}
+
+// Salviamo i riferimenti originali prima di sostituirli. Le funzioni dichiarate
+// nello script principale sono globali nella pagina e quindi aggiornabili qui.
+const originalConfrontaEstratto = globalThis.confrontaEstratto;
+if(typeof originalConfrontaEstratto === "function"){
+  globalThis.confrontaEstratto = function(ops,anno,mese){
+    return originalConfrontaEstratto(pulisciOperazioniBper(ops),anno,mese);
+  };
+}
+
 globalThis.trovaResponsabiliScostamento = trovaResponsabiliSmart;
