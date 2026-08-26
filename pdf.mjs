@@ -5,6 +5,23 @@ export * from "./pdf-lib-original.mjs";
 import * as PDFJS from "./pdf-lib-original.mjs";
 export default PDFJS;
 
+const LIVE_BUILD="index/main · BPER-v2 · 2026-08-27";
+try{
+  const mostraBuild=()=>{
+    if(typeof document==="undefined"||document.getElementById("liveBuildVersion"))return;
+    const p=document.createElement("p");
+    p.id="liveBuildVersion";
+    p.className="sub";
+    p.style.cssText="margin:4px 0 10px;font-family:ui-monospace,Menlo,monospace;font-size:11px;overflow-wrap:anywhere";
+    p.textContent="Versione live: "+LIVE_BUILD;
+    const anchor=document.getElementById("cloudStatusLine")||document.getElementById("subtitle");
+    if(anchor&&anchor.parentNode)anchor.parentNode.insertBefore(p,anchor.nextSibling);
+    else document.body?.prepend(p);
+  };
+  mostraBuild();
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",mostraBuild,{once:true});
+}catch(_){ }
+
 const fullSlashDate=s=>/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(String(s||"").trim());
 
 function filtraPaginaBper(items){
