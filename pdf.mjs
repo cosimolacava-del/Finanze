@@ -1,17 +1,28 @@
 // Wrapper della libreria PDF.js originale.
 // Mantiene le API PDF.js ma ripulisce il testo BPER PRIMA che il parser dell'app
-// lo analizzi, evitando che le date interne alle descrizioni vengano interpretate
-// come nuovi movimenti.
+// lo analizzi. Il parser storico accettava anche date senza anno con il punto
+// (es. 3.96): questo faceva scambiare importi come 3.965,98 e orari come
+// 03.43.13 per nuove date/movimenti.
 export * from "./pdf-lib-original.mjs";
 import * as PDFJS from "./pdf-lib-original.mjs";
 export default PDFJS;
 
 function sanitizePdfText(s=""){
-  return String(s)
-    .replace(/\b\d{1,2}\.\d{1,2}\.\d{4}\/\d{1,2}\.\d{2}\.\d{2}\b/g," ")
-    .replace(/\b(?:del\s+)?\d{1,2}\.\d{1,2}\.\d{4}\b/gi," ")
-    .replace(/\s+/g," ")
-    .trim();
+  let v=String(s);
+
+  // Data+ora dentro le descrizioni carta BPER, es. 25.08.2026/03.43.13.
+  v=v.replace(/\b\d{1,2}\.\d{1,2}\.\d{4}\/\d{1,2}\.\d{2}\.\d{2}\b/g," ");
+  // Data contabile ripetuta nella descrizione, es. "del 20.08.2026".
+  v=v.replace(/\b(?:del\s+)?\d{1,2}\.\d{1,2}\.\d{4}\b/gi," ");
+  // Se PDF.js spezza data e ora in item separati, elimina anche l'ora residua.
+  v=v.replace(/\/?\b\d{1,2}\.\d{2}\.\d{2}\b/g," ");
+
+  // CRITICO: 3.965,98 veniva interpretato dal vecchio dataRx come una data
+  // "3.96" (anno opzionale), generando movimenti fantasma. Togliere il separatore
+  // delle migliaia non cambia il valore monetario: 3965,98 viene letto correttamente.
+  v=v.replace(/(?<!\d)([+\-]?\d{1,3}(?:\.\d{3})+),(\d{2})(?!\d)/g,(m,intPart,dec)=>intPart.replace(/\./g,"")+","+dec);
+
+  return v.replace(/\s+/g," ").trim();
 }
 
 function wrapTextStream(stream){
@@ -55,7 +66,7 @@ function wrapPdf(pdf){
   });
 }
 
-// Export esplicito che prevale su export *.
+// Export esplicito che prevale sul re-export della libreria originale.
 export function getDocument(...args){
   const task=PDFJS.getDocument(...args);
   const wrappedPromise=task.promise.then(wrapPdf);
@@ -68,7 +79,8 @@ export function getDocument(...args){
   });
 }
 
-// Riconciliazione smart degli scostamenti.
+// La ricerca smart resta disponibile; il confronto principale è però affidabile
+// solo dopo che il PDF è stato ripulito dai falsi movimenti.
 const norm=(s="")=>String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\b(operazione|carta|contabilizzato|pagamento|addebito|sdd|rid|sepa|ita|it|eur)\b/g," ").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
 const safeVal=(o,valore)=>{const n=Number(valore(o));return Number.isFinite(n)?Math.abs(n):0;};
 function motivoItem(o){const s=norm(o.descrizione||o.riga||"");const m=[];if(o.pending)m.push("movimento ancora da contabilizzare");if(/american express|amex/.test(s))m.push("addebito carta aggregato: possibile doppio conteggio");if(/paypal/.test(s))m.push("pagamento intermediato: verifica eventuale doppio conteggio");if(/commission/.test(s))m.push("commissione separata dall'addebito principale");return m;}
