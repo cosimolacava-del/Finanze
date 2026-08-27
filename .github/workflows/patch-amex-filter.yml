@@ -1,0 +1,52 @@
+name: Patch AMEX filter
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-amex-filter.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch index.html
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+
+          old='const bancaEntrate=banca.filter(o=>o.importo>0),bancaUscite=banca.filter(o=>o.importo<0);\n  const appEntrate=app.filter(o=>o.segno>0),appUscite=app.filter(o=>o.segno<0);'
+          new='const isAmexBanca=o=>/american\\s*express|\\bamex\\b/i.test(String(o.descrizione||"")+" "+String(o.riga||""));\n  const bancaEntrate=banca.filter(o=>o.importo>0),bancaUscite=banca.filter(o=>o.importo<0&&!isAmexBanca(o));\n  const appEntrate=app.filter(o=>o.segno>0),appUscite=app.filter(o=>o.segno<0&&o.tipo!=="amex");'
+          if old not in s:
+              raise SystemExit('ERRORE: blocco confronto entrate/uscite non trovato')
+          s=s.replace(old,new,1)
+
+          s,n=re.subn(r'Build index: \\d{4}\\.\\d{2}\\.\\d{2}-\\d+', 'Build index: 2026.08.27-03', s, count=1)
+          if n!=1:
+              raise SystemExit('ERRORE: marker build non aggiornato')
+
+          p.write_text(s,encoding='utf-8')
+          PY
+
+      - name: Verify
+        run: |
+          grep -F 'Build index: 2026.08.27-03' index.html
+          grep -F 'const isAmexBanca=' index.html
+          grep -F 'o.tipo!=="amex"' index.html
+
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git commit -m 'Index v2026.08.27-03: esclude AMEX da entrambi i lati del confronto BPER'
+          git push
