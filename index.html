@@ -221,7 +221,7 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
     <div class="tabs" id="tabs"></div>
   </div>
   <p class="sub" id="subtitle"></p>
-  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.08.27-08</p>
+  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.08.28-09</p>
   <p class="sub" id="cloudStatusLine">Cloud: <span id="cloudStatus" role="status" aria-live="polite">accesso richiesto</span> <span id="firebaseUserLabel"></span> <button id="firebaseLogoutBtn" class="range-btn" style="display:none;margin-left:6px">Esci</button></p>
   <div id="reminderBanner" class="hidden"></div>
   <div id="content"></div>
@@ -1926,47 +1926,59 @@ async function caricaPdfJs(){
   lib.GlobalWorkerOptions.workerSrc="./pdf.worker.mjs";
   return lib;
 }
-function trovaResponsabiliScostamento(lista,target,valore){
-  const tolleranza=1,items=lista.filter(x=>valore(x)>0).slice(0,180),risultati=[];
-  const aggiungi=indici=>{
-    const chiave=indici.join("-");
-    if(!risultati.some(r=>r.chiave===chiave))risultati.push({chiave,items:indici.map(i=>items[i]),totale:indici.reduce((s,i)=>s+valore(items[i]),0)});
-  };
-  for(let i=0;i<items.length&&risultati.length<8;i++)if(Math.abs(valore(items[i])-target)<=tolleranza)aggiungi([i]);
-  for(let i=0;i<items.length&&risultati.length<8;i++)for(let j=i+1;j<items.length&&risultati.length<8;j++)if(Math.abs(valore(items[i])+valore(items[j])-target)<=tolleranza)aggiungi([i,j]);
-  for(let i=0;i<items.length&&risultati.length<8;i++){
-    const richiesti=new Map();
-    for(let j=i+1;j<items.length;j++){
-      const necessario=target-valore(items[i])-valore(items[j]);
-      const cent=Math.round(necessario*100);
-      for(let d=-Math.ceil(tolleranza*100);d<=Math.ceil(tolleranza*100);d++){
-        const k=richiesti.get(cent+d);
-        if(k!=null&&k!==j){aggiungi([i,k,j].sort((a,b)=>a-b));break;}
-      }
-      richiesti.set(Math.round(valore(items[j])*100),j);
-      if(risultati.length>=8)break;
+function abbinaMovimentiEstratto(bancaLista,appLista,bancaValore,appValore){
+  const candidati=[];
+  bancaLista.forEach((b,bi)=>appLista.forEach((a,ai)=>{
+    const vb=Number(bancaValore(b)||0),va=Number(appValore(a)||0),delta=Math.abs(vb-va);
+    if(delta>0.05)return;
+    const sim=similaritaDescrizione(b.descrizione||b.riga||'',a.descrizione||'');
+    let giornoScore=0;
+    if(b.giorno&&a.giorno){
+      const dg=Math.abs(Number(b.giorno)-Number(a.giorno));
+      giornoScore=dg===0?30:(dg<=2?22:(dg<=5?12:(dg<=10?4:-8)));
     }
-  }
-  return risultati;
+    const score=120-Math.min(50,delta*1000)+sim*45+giornoScore;
+    candidati.push({bi,ai,score,delta,sim});
+  }));
+  candidati.sort((x,y)=>y.score-x.score || x.delta-y.delta || y.sim-x.sim);
+  const usatiB=new Set(),usatiA=new Set(),abbinati=[];
+  candidati.forEach(c=>{
+    if(usatiB.has(c.bi)||usatiA.has(c.ai))return;
+    usatiB.add(c.bi);usatiA.add(c.ai);
+    abbinati.push({banca:bancaLista[c.bi],app:appLista[c.ai],score:c.score});
+  });
+  const soloBanca=bancaLista.filter((_,i)=>!usatiB.has(i));
+  const soloApp=appLista.filter((_,i)=>!usatiA.has(i));
+  return {abbinati,soloBanca,soloApp};
 }
+
+function classificaScostamento(diff,match,bancaValore,appValore){
+  if(Math.abs(diff)<=1)return [];
+  const out=[];
+  match.soloBanca.forEach(o=>out.push({origine:'banca',tipo:'solo_banca',items:[o],totale:Number(bancaValore(o)||0)}));
+  match.soloApp.forEach(o=>out.push({origine:'app',tipo:'solo_app',items:[o],totale:Number(appValore(o)||0)}));
+  out.forEach(r=>{
+    const coerente=(diff>0&&r.origine==='banca')||(diff<0&&r.origine==='app');
+    r.priorita=(coerente?1000:0)+Math.min(999,Math.abs(r.totale));
+  });
+  out.sort((a,b)=>b.priorita-a.priorita);
+  return out.slice(0,20);
+}
+
 function confrontaEstratto(ops,anno,mese){
   const banca=ops.filter(o=>o.anno===anno&&o.mese===mese),app=operazioniCassaAttese(anno,mese);
-  const totaleAmexAtteso=app.filter(o=>o.segno<0&&o.tipo==="amex").reduce((s,o)=>s+Number(o.importo||0),0);
   const isAmexBanca=o=>/american|amex/i.test(String(o.descrizione||"")+" "+String(o.riga||""));
-const bancaEntrate=banca.filter(o=>o.importo>0),bancaUscite=banca.filter(o=>o.importo<0&&!isAmexBanca(o));
+  const bancaEntrate=banca.filter(o=>o.importo>0),bancaUscite=banca.filter(o=>o.importo<0&&!isAmexBanca(o));
   const appEntrate=app.filter(o=>o.segno>0),appUscite=app.filter(o=>o.segno<0&&o.tipo!=="amex");
   const totBancaEntrate=bancaEntrate.reduce((s,o)=>s+o.importo,0),totBancaUscite=bancaUscite.reduce((s,o)=>s+Math.abs(o.importo),0);
   const totAppEntrate=appEntrate.reduce((s,o)=>s+o.importo,0),totAppUscite=appUscite.reduce((s,o)=>s+o.importo,0);
   const diffEntrate=totBancaEntrate-totAppEntrate,diffUscite=totBancaUscite-totAppUscite;
-  const cerca=(diff,bancaLista,appLista,bancaValore,appValore)=>{
-    if(Math.abs(diff)<=1)return [];
-    return diff>0
-      ? trovaResponsabiliScostamento(bancaLista,Math.abs(diff),bancaValore).map(r=>({...r,origine:"banca"}))
-      : trovaResponsabiliScostamento(appLista,Math.abs(diff),appValore).map(r=>({...r,origine:"app"}));
-  };
+  const matchEntrate=abbinaMovimentiEstratto(bancaEntrate,appEntrate,o=>o.importo,o=>o.importo);
+  const matchUscite=abbinaMovimentiEstratto(bancaUscite,appUscite,o=>Math.abs(o.importo),o=>o.importo);
   return {anno,mese,banca,app,pending:banca.filter(o=>o.pending),totBancaEntrate,totBancaUscite,totAppEntrate,totAppUscite,diffEntrate,diffUscite,
-    responsabiliEntrate:cerca(diffEntrate,bancaEntrate,appEntrate,o=>o.importo,o=>o.importo),
-    responsabiliUscite:cerca(diffUscite,bancaUscite,appUscite,o=>Math.abs(o.importo),o=>o.importo)};
+    matchEntrate,matchUscite,
+    responsabiliEntrate:classificaScostamento(diffEntrate,matchEntrate,o=>o.importo,o=>o.importo),
+    responsabiliUscite:classificaScostamento(diffUscite,matchUscite,o=>Math.abs(o.importo),o=>o.importo)};
 }
 
 function renderAnalisiEstratto(){
@@ -1977,15 +1989,15 @@ function renderAnalisiEstratto(){
   const rigaTotale=(titolo,banca,app,diff,ok)=>`<tr><td style="font-weight:700">${titolo}</td><td style="font-family:ui-monospace,monospace">${eur(banca)}</td><td style="font-family:ui-monospace,monospace">${eur(app)}</td><td style="font-family:ui-monospace,monospace;color:${ok?GREEN:RUST};font-weight:700">${diff>0?'+':''}${eur(diff)}</td><td><span class="esito" style="color:${ok?GREEN:RUST}">${ok?'✓ OK':'⚠ Verifica'}</span></td></tr>`;
   const candidati=(titolo,arr,diff)=>{
     if(Math.abs(diff)<=1)return '';
-    if(!arr.length)return `<div class="warn-box"><b>${titolo}</b><br>Nessun importo singolo o combinazione fino a 3 movimenti spiega esattamente lo scostamento di ${eur(Math.abs(diff))}.</div>`;
-    return `<div><b style="font-size:12px">${titolo}</b><div class="statement-list">${arr.map(r=>`<div class="statement-row"><span>${r.items.map(o=>escapeHtml(o.descrizione||o.riga||"Operazione")).join(' + ')} <small style="color:${MUTED}">(${r.origine==='banca'?'nel PDF':'nell’app'})</small></span><b style="color:${RUST}">${eur(r.totale)}</b></div>`).join('')}</div></div>`;
+    if(!arr.length)return `<div class="warn-box"><b>${titolo}</b><br>Tutti i movimenti con importo confrontabile risultano già abbinati; lo scostamento richiede un controllo manuale.</div>`;
+    return `<div><b style="font-size:12px">${titolo}</b><div class="statement-list">${arr.map(r=>{const o=r.items[0],d=o.giorno?String(o.giorno).padStart(2,'0')+' · ':'';return `<div class="statement-row"><span>${d}${escapeHtml(o.descrizione||o.riga||"Operazione")} <small style="color:${MUTED}">${r.origine==='banca'?'solo nel PDF':'solo nell’app'}</small></span><b style="color:${RUST}">${eur(r.totale)}</b></div>`;}).join('')}</div></div>`;
   };
   return `<div class="statement-result">
     <div class="statement-summary"><div class="statement-kpi"><small>Movimenti banca rilevati</small><b>${a.banca.length}${a.pending?.length?` <span style="font-size:10px;color:${GOLD}">(${a.pending.length} pendenti)</span>`:''}</b></div><div class="statement-kpi"><small>Controllo entrate</small><b style="color:${okEntrate?GREEN:RUST}">${okEntrate?'✓ Coerenti':eur(a.diffEntrate)}</b></div><div class="statement-kpi"><small>Controllo uscite</small><b style="color:${okUscite?GREEN:RUST}">${okUscite?'✓ Coerenti':eur(a.diffUscite)}</b></div></div>
     <table><thead><tr><th></th><th>PDF banca</th><th>App</th><th>Differenza</th><th>Esito</th></tr></thead><tbody>${rigaTotale('Entrate',a.totBancaEntrate,a.totAppEntrate,a.diffEntrate,okEntrate)}${rigaTotale('Uscite',a.totBancaUscite,a.totAppUscite,a.diffUscite,okUscite)}</tbody></table>
-    ${tuttoOk?'<div style="color:'+GREEN+';font-size:12px;font-weight:700">✓ Entrate e uscite coincidono entro 1 euro. Nessun confronto movimento per movimento necessario.</div>':'<div class="warn-box">C’è uno scostamento: sotto trovi solo i movimenti singoli o le piccole combinazioni che potrebbero spiegarlo, calcolati sulla differenza.</div>'}
-    ${candidati('Possibili responsabili dello scostamento entrate',a.responsabiliEntrate,a.diffEntrate)}
-    ${candidati('Possibili responsabili dello scostamento uscite',a.responsabiliUscite,a.diffUscite)}
+    ${tuttoOk?'<div style="color:'+GREEN+';font-size:12px;font-weight:700">✓ Entrate e uscite coincidono entro 1 euro. Nessun confronto movimento per movimento necessario.</div>':'<div class="warn-box">C’è uno scostamento: prima abbino automaticamente PDF e app per importo, giorno e descrizione; sotto mostro i movimenti rimasti senza controparte, ordinati per probabilità.</div>'}
+    ${candidati('Movimenti non abbinati — entrate',a.responsabiliEntrate,a.diffEntrate)}
+    ${candidati('Movimenti non abbinati — uscite',a.responsabiliUscite,a.diffUscite)}
     <div class="sub">Analisi automatica locale: nessun contenuto del PDF viene salvato o inviato a Firestore. I PDF scansionati come immagini richiedono OCR e potrebbero non essere leggibili.</div>
   </div>`;
 }
