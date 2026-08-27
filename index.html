@@ -221,7 +221,7 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
     <div class="tabs" id="tabs"></div>
   </div>
   <p class="sub" id="subtitle"></p>
-  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.08.27-03</p>
+  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.08.27-04</p>
   <p class="sub" id="cloudStatusLine">Cloud: <span id="cloudStatus" role="status" aria-live="polite">accesso richiesto</span> <span id="firebaseUserLabel"></span> <button id="firebaseLogoutBtn" class="range-btn" style="display:none;margin-left:6px">Esci</button></p>
   <div id="reminderBanner" class="hidden"></div>
   <div id="content"></div>
@@ -1069,6 +1069,14 @@ function currentTx(){
 function renderMeseView(){
   const years = getYears();
   const liquidita = datiObiettiviRisparmio();
+  const accantonamentoMutuo = (()=>{
+    if(!liquidita.periodo) return 0;
+    const [ay,am]=liquidita.periodo.split("-").map(Number);
+    const cfgs=normalizzaSpeseTrimestrali(state.speseTrimestrali||[]).filter(cfg=>/mutuo/i.test(String(cfg.descrizioneMatch||"")));
+    if(!cfgs.length) return 0;
+    return state.transazioni.filter(t=>t.anno===ay&&t.mese===am&&t.categoria!=="Entrate"&&cfgs.some(cfg=>String(t.descrizione||"").toLowerCase().includes(String(cfg.descrizioneMatch||"").toLowerCase()))).reduce((sum,t)=>sum+Number(t.importo||0),0);
+  })();
+  const liquiditaDisponibile = liquidita.saldo==null ? null : Number(liquidita.saldo)-accantonamentoMutuo;
   const tx = currentTx();
   const entrate = tx.filter(t=>t.categoria==="Entrate").reduce((s,t)=>s+t.importo,0);
   const uscite = tx.filter(t=>t.categoria!=="Entrate").reduce((s,t)=>s+t.importo,0);
@@ -1140,7 +1148,7 @@ function renderMeseView(){
     <button class="nav-btn" id="nextMonth">&#8250;</button>
   </div>
   <div class="dashboard-top">
-    <div class="card balance-hero"><div class="summary-label">Liquidità effettiva</div><div class="balance-main">${liquidita.saldo==null?'—':eur(liquidita.saldo)}</div><div class="balance-meta">${liquidita.periodo?'Ultimo saldo reale · '+liquidita.periodo:'Inseriscila in Saldo Conto'}</div></div>
+    <div class="card balance-hero"><div class="summary-label">Liquidità effettiva</div><div class="balance-main">${liquiditaDisponibile==null?'—':eur(liquiditaDisponibile)}</div><div class="balance-meta">${liquidita.periodo?('Saldo reale '+eur(liquidita.saldo)+' · meno '+eur(accantonamentoMutuo)+' mutuo accantonato · '+liquidita.periodo):'Inseriscila in Saldo Conto'}</div></div>
     <div class="summary-grid">
       <div class="card summary-card"><div class="summary-label">Entrate</div><div class="summary-value" style="color:${GREEN}">${eur(entrate)}</div>${pctBadge(pctEntrate, true)}</div>
       <div class="card summary-card"><div class="summary-label">Uscite</div><div class="summary-value" style="color:${RUST}">${eur(uscite)}</div>${pctBadge(pctUscite, false)}</div>
