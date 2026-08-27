@@ -221,7 +221,7 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
     <div class="tabs" id="tabs"></div>
   </div>
   <p class="sub" id="subtitle"></p>
-  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.08.27-07</p>
+  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.08.27-08</p>
   <p class="sub" id="cloudStatusLine">Cloud: <span id="cloudStatus" role="status" aria-live="polite">accesso richiesto</span> <span id="firebaseUserLabel"></span> <button id="firebaseLogoutBtn" class="range-btn" style="display:none;margin-left:6px">Esci</button></p>
   <div id="reminderBanner" class="hidden"></div>
   <div id="content"></div>
@@ -1952,13 +1952,8 @@ function trovaResponsabiliScostamento(lista,target,valore){
 function confrontaEstratto(ops,anno,mese){
   const banca=ops.filter(o=>o.anno===anno&&o.mese===mese),app=operazioniCassaAttese(anno,mese);
   const totaleAmexAtteso=app.filter(o=>o.segno<0&&o.tipo==="amex").reduce((s,o)=>s+Number(o.importo||0),0);
-  const isAmexBanca=o=>{
-    const testo=String(o.descrizione||"")+" "+String(o.riga||"");
-    if(/american\s*express|\bamex\b/i.test(testo)) return true;
-    if(totaleAmexAtteso>0 && o.importo<0 && Math.abs(Math.abs(Number(o.importo))-totaleAmexAtteso)<=0.05) return true;
-    return false;
-  };
-  const bancaEntrate=banca.filter(o=>o.importo>0),bancaUscite=banca.filter(o=>o.importo<0&&!isAmexBanca(o));
+  const isAmexBanca=o=>/american|amex/i.test(String(o.descrizione||"")+" "+String(o.riga||""));
+const bancaEntrate=banca.filter(o=>o.importo>0),bancaUscite=banca.filter(o=>o.importo<0&&!isAmexBanca(o));
   const appEntrate=app.filter(o=>o.segno>0),appUscite=app.filter(o=>o.segno<0&&o.tipo!=="amex");
   const totBancaEntrate=bancaEntrate.reduce((s,o)=>s+o.importo,0),totBancaUscite=bancaUscite.reduce((s,o)=>s+Math.abs(o.importo),0);
   const totAppEntrate=appEntrate.reduce((s,o)=>s+o.importo,0),totAppUscite=appUscite.reduce((s,o)=>s+o.importo,0);
