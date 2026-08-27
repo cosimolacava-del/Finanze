@@ -1,0 +1,46 @@
+name: Patch AMEX BPER v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-amex-bper-v2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch index.html
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          old='''  const isAmexBanca=o=>/american\\s*express|\\bamex\\b/i.test(String(o.descrizione||"")+" "+String(o.riga||""));\n  const bancaEntrate=banca.filter(o=>o.importo>0),bancaUscite=banca.filter(o=>o.importo<0&&!isAmexBanca(o));\n  const appEntrate=app.filter(o=>o.segno>0),appUscite=app.filter(o=>o.segno<0&&o.tipo!=="amex");'''
+          new='''  const totaleAmexAtteso=app.filter(o=>o.segno<0&&o.tipo==="amex").reduce((s,o)=>s+Number(o.importo||0),0);\n  const isAmexBanca=o=>{\n    const testo=String(o.descrizione||"")+" "+String(o.riga||"");\n    if(/american\\s*express|\\bamex\\b/i.test(testo)) return true;\n    if(totaleAmexAtteso>0 && o.importo<0 && Math.abs(Math.abs(Number(o.importo))-totaleAmexAtteso)<=0.05) return true;\n    return false;\n  };\n  const bancaEntrate=banca.filter(o=>o.importo>0),bancaUscite=banca.filter(o=>o.importo<0&&!isAmexBanca(o));\n  const appEntrate=app.filter(o=>o.segno>0),appUscite=app.filter(o=>o.segno<0&&o.tipo!=="amex");'''
+          if old not in s:
+              raise SystemExit('ERRORE: blocco AMEX attuale non trovato')
+          s=s.replace(old,new,1)
+          if 'Build index: 2026.08.27-04' not in s:
+              raise SystemExit('ERRORE: marker build -04 non trovato')
+          s=s.replace('Build index: 2026.08.27-04','Build index: 2026.08.27-05',1)
+          p.write_text(s,encoding='utf-8')
+          PY
+      - name: Verify
+        run: |
+          grep -F 'Build index: 2026.08.27-05' index.html
+          grep -F 'const totaleAmexAtteso=' index.html
+          grep -F 'Math.abs(Math.abs(Number(o.importo))-totaleAmexAtteso)<=0.05' index.html
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git commit -m 'Index v2026.08.27-05: filtro AMEX BPER per importo atteso'
+          git push
