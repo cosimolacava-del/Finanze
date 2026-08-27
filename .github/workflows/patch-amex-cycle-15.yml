@@ -1,0 +1,56 @@
+name: Patch AMEX cycle 15
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-amex-cycle-15.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch index.html
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+
+          old='const addebito = t.amex ? shiftMonth(t.anno,t.mese,1) : {anno:t.anno,mese:t.mese};'
+          new='const addebito = t.amex ? (t.giorno ? (Number(t.giorno)>=15 ? shiftMonth(t.anno,t.mese,1) : {anno:t.anno,mese:t.mese}) : shiftMonth(t.anno,t.mese,1)) : {anno:t.anno,mese:t.mese};'
+          if old not in s:
+              raise SystemExit('ERRORE: logica AMEX riepilogo non trovata')
+          s=s.replace(old,new,1)
+
+          old2='const cash=t.amex?shiftMonth(t.anno,t.mese,1):{anno:t.anno,mese:t.mese};'
+          new2='const cash=t.amex?(t.giorno?(Number(t.giorno)>=15?shiftMonth(t.anno,t.mese,1):{anno:t.anno,mese:t.mese}):shiftMonth(t.anno,t.mese,1)):{anno:t.anno,mese:t.mese};'
+          if old2 not in s:
+              raise SystemExit('ERRORE: logica AMEX operazioni attese non trovata')
+          s=s.replace(old2,new2,1)
+
+          if 'Build index: 2026.08.27-05' not in s:
+              raise SystemExit('ERRORE: marker build -05 non trovato')
+          s=s.replace('Build index: 2026.08.27-05','Build index: 2026.08.27-06',1)
+
+          p.write_text(s,encoding='utf-8')
+          PY
+
+      - name: Verify
+        run: |
+          grep -F 'Build index: 2026.08.27-06' index.html
+          grep -F 'Number(t.giorno)>=15' index.html
+
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git commit -m 'Index v2026.08.27-06: ciclo AMEX dal giorno 15'
+          git push
