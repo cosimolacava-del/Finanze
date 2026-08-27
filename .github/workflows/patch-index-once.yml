@@ -1,0 +1,65 @@
+name: Patch index once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-index-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch index.html safely
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+
+          old='<p class="sub" id="subtitle"></p>'
+          new='''<p class="sub" id="subtitle"></p>\n  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.08.27-01</p>'''
+          if old not in s:
+              raise SystemExit('ERRORE: punto inserimento versione non trovato')
+          s=s.replace(old,new,1)
+
+          old_import='import("./pdf.mjs")'
+          new_import='import("./pdf.mjs?v=20260827-01")'
+          if old_import not in s:
+              raise SystemExit('ERRORE: import pdf.mjs non trovato')
+          s=s.replace(old_import,new_import,1)
+
+          old_rx=r'''const dataRx=/(\d{4})-(\d{1,2})-(\d{1,2})|(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?/;'''
+          new_rx=r'''const dataRx=/^(?:(\d{4})-(\d{1,2})-(\d{1,2})|(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4}))/;'''
+          if old_rx not in s:
+              raise SystemExit('ERRORE: dataRx vecchia non trovata')
+          s=s.replace(old_rx,new_rx,1)
+
+          old_ver='const APP_VERSION = "2.2-obiettivi-liquidita";'
+          new_ver='const APP_VERSION = "2.3-bper-20260827-01";'
+          if old_ver in s:
+              s=s.replace(old_ver,new_ver,1)
+
+          p.write_text(s,encoding='utf-8')
+          PY
+
+      - name: Verify patch
+        run: |
+          grep -F 'Build index: 2026.08.27-01' index.html
+          grep -F 'pdf.mjs?v=20260827-01' index.html
+          grep -F 'const APP_VERSION = "2.3-bper-20260827-01";' index.html
+          grep -F 'const dataRx=/^(?:' index.html
+
+      - name: Commit patched index
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git commit -m 'Index v2026.08.27-01: marker live, cache-bust PDF e parser date stretto'
+          git push
