@@ -1,10 +1,11 @@
-name: Patch riconciliazione movimenti v2
+name: Patch matching stipendio v10
 
 on:
   push:
     branches: [main]
     paths:
       - '.github/workflows/patch-reconciliation-v2.yml'
+      - '.github/scripts/patch_salary_v10.py'
 
 permissions:
   contents: write
@@ -17,16 +18,16 @@ jobs:
         with:
           fetch-depth: 0
       - name: Patch index.html
-        run: python .github/scripts/patch_reconciliation_v2.py
+        run: python .github/scripts/patch_salary_v10.py
       - name: Verify
         run: |
-          grep -F 'Build index: 2026.08.28-09' index.html
-          grep -F 'function abbinaMovimentiEstratto' index.html
-          grep -F 'Movimenti non abbinati — uscite' index.html
+          grep -F 'Build index: 2026.08.28-10' index.html
+          grep -F 'function tipoSemanticoMovimento' index.html
+          grep -F 'emolumenti|stipendio|stipendi|retribuzione' index.html
       - name: Commit
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add index.html
-          git commit -m 'Index v2026.08.28-09: riconciliazione movimento per movimento'
+          git commit -m 'Index v2026.08.28-10: abbina EMOLUMENTI e stipendio semanticamente'
           git push
