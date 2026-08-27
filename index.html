@@ -221,7 +221,7 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
     <div class="tabs" id="tabs"></div>
   </div>
   <p class="sub" id="subtitle"></p>
-  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.08.27-05</p>
+  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.08.27-06</p>
   <p class="sub" id="cloudStatusLine">Cloud: <span id="cloudStatus" role="status" aria-live="polite">accesso richiesto</span> <span id="firebaseUserLabel"></span> <button id="firebaseLogoutBtn" class="range-btn" style="display:none;margin-left:6px">Esci</button></p>
   <div id="reminderBanner" class="hidden"></div>
   <div id="content"></div>
@@ -749,7 +749,7 @@ function riepilogoCassaMese(anno, mese){
   let uscite = 0;
   state.transazioni.filter(t=>t.categoria!=="Entrate").forEach(t => {
     if (eTrimestrale(t)) return;
-    const addebito = t.amex ? shiftMonth(t.anno,t.mese,1) : {anno:t.anno,mese:t.mese};
+    const addebito = t.amex ? (t.giorno ? (Number(t.giorno)>=15 ? shiftMonth(t.anno,t.mese,1) : {anno:t.anno,mese:t.mese}) : shiftMonth(t.anno,t.mese,1)) : {anno:t.anno,mese:t.mese};
     if (addebito.anno===anno && addebito.mese===mese) uscite += t.importo;
   });
   configurazioni.forEach(cfg => {
@@ -1829,7 +1829,7 @@ function operazioniCassaAttese(anno, mese){
     out.push({segno:1,importo,descrizione:t.descrizione,giorno:t.giorno||null,tipo:voce?"stipendio":"entrata",id:t.id});
   });
   state.transazioni.filter(t=>t.categoria!=="Entrate"&&!eTrimestrale(t)).forEach(t=>{
-    const cash=t.amex?shiftMonth(t.anno,t.mese,1):{anno:t.anno,mese:t.mese};
+    const cash=t.amex?(t.giorno?(Number(t.giorno)>=15?shiftMonth(t.anno,t.mese,1):{anno:t.anno,mese:t.mese}):shiftMonth(t.anno,t.mese,1)):{anno:t.anno,mese:t.mese};
     if(cash.anno===anno&&cash.mese===mese)out.push({segno:-1,importo:t.importo,descrizione:t.descrizione,giorno:t.giorno||null,tipo:t.amex?"amex":"uscita",id:t.id});
   });
   trimestrali.forEach(cfg=>{
