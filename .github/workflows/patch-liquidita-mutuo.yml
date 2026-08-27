@@ -1,0 +1,59 @@
+name: Patch liquidita mutuo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-liquidita-mutuo.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch index.html
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+
+          old='''function renderMeseView(){\n  const years = getYears();\n  const liquidita = datiObiettiviRisparmio();\n  const tx = currentTx();'''
+          new='''function renderMeseView(){\n  const years = getYears();\n  const liquidita = datiObiettiviRisparmio();\n  const accantonamentoMutuo = (()=>{\n    if(!liquidita.periodo) return 0;\n    const [ay,am]=liquidita.periodo.split("-").map(Number);\n    const cfgs=normalizzaSpeseTrimestrali(state.speseTrimestrali||[]).filter(cfg=>/mutuo/i.test(String(cfg.descrizioneMatch||"")));\n    if(!cfgs.length) return 0;\n    return state.transazioni.filter(t=>t.anno===ay&&t.mese===am&&t.categoria!=="Entrate"&&cfgs.some(cfg=>String(t.descrizione||"").toLowerCase().includes(String(cfg.descrizioneMatch||"").toLowerCase()))).reduce((sum,t)=>sum+Number(t.importo||0),0);\n  })();\n  const liquiditaDisponibile = liquidita.saldo==null ? null : Number(liquidita.saldo)-accantonamentoMutuo;\n  const tx = currentTx();'''
+          if old not in s:
+              raise SystemExit('ERRORE: blocco iniziale renderMeseView non trovato')
+          s=s.replace(old,new,1)
+
+          old2='''<div class="card balance-hero"><div class="summary-label">Liquidità effettiva</div><div class="balance-main">${liquidita.saldo==null?'—':eur(liquidita.saldo)}</div><div class="balance-meta">${liquidita.periodo?'Ultimo saldo reale · '+liquidita.periodo:'Inseriscila in Saldo Conto'}</div></div>'''
+          new2='''<div class="card balance-hero"><div class="summary-label">Liquidità effettiva</div><div class="balance-main">${liquiditaDisponibile==null?'—':eur(liquiditaDisponibile)}</div><div class="balance-meta">${liquidita.periodo?('Saldo reale '+eur(liquidita.saldo)+' · meno '+eur(accantonamentoMutuo)+' mutuo accantonato · '+liquidita.periodo):'Inseriscila in Saldo Conto'}</div></div>'''
+          if old2 not in s:
+              raise SystemExit('ERRORE: card liquidita non trovata')
+          s=s.replace(old2,new2,1)
+
+          old3='Build index: 2026.08.27-03'
+          new3='Build index: 2026.08.27-04'
+          if old3 not in s:
+              raise SystemExit('ERRORE: marker build -03 non trovato')
+          s=s.replace(old3,new3,1)
+
+          p.write_text(s,encoding='utf-8')
+          PY
+
+      - name: Verify
+        run: |
+          grep -F 'Build index: 2026.08.27-04' index.html
+          grep -F 'const liquiditaDisponibile' index.html
+          grep -F 'mutuo accantonato' index.html
+
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git commit -m 'Index v2026.08.27-04: liquidita al netto del mutuo accantonato'
+          git push
