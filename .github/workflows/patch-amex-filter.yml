@@ -20,7 +20,6 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
           p=Path('index.html')
           s=p.read_text(encoding='utf-8')
 
@@ -30,9 +29,10 @@ jobs:
               raise SystemExit('ERRORE: blocco confronto entrate/uscite non trovato')
           s=s.replace(old,new,1)
 
-          s,n=re.subn(r'Build index: \\d{4}\\.\\d{2}\\.\\d{2}-\\d+', 'Build index: 2026.08.27-03', s, count=1)
-          if n!=1:
-              raise SystemExit('ERRORE: marker build non aggiornato')
+          old_build='Build index: 2026.08.27-02'
+          if old_build not in s:
+              raise SystemExit('ERRORE: marker build -02 non trovato')
+          s=s.replace(old_build,'Build index: 2026.08.27-03',1)
 
           p.write_text(s,encoding='utf-8')
           PY
