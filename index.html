@@ -221,7 +221,7 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
     <div class="tabs" id="tabs"></div>
   </div>
   <p class="sub" id="subtitle"></p>
-  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.08.27-06</p>
+  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.08.27-07</p>
   <p class="sub" id="cloudStatusLine">Cloud: <span id="cloudStatus" role="status" aria-live="polite">accesso richiesto</span> <span id="firebaseUserLabel"></span> <button id="firebaseLogoutBtn" class="range-btn" style="display:none;margin-left:6px">Esci</button></p>
   <div id="reminderBanner" class="hidden"></div>
   <div id="content"></div>
@@ -1884,12 +1884,22 @@ async function estraiOperazioniPdf(file,annoDefault,meseDefault){
   for(let p=1;p<=pdf.numPages;p++){
     const page=await pdf.getPage(p),content=await contenutoTestoPaginaCompat(page),byY={};
     content.items.forEach(it=>{const y=Math.round((it.transform&&it.transform[5])||0);(byY[y]=byY[y]||[]).push(it);});
+    let ultimaOpPagina=null;
     Object.keys(byY).sort((a,b)=>b-a).forEach(y=>{
       const items=byY[y].sort((a,b)=>(a.transform?.[4]||0)-(b.transform?.[4]||0));
       const riga=items.map(x=>x.str).join(' ').replace(/\s+/g,' ').trim();
       if(riga)righe.push(riga);
       const dataItem=items.find(it=>Number(it.transform?.[4]||0)<80&&dataCompleta.test(String(it.str||'').trim()));
-      if(!dataItem)return;
+      if(!dataItem){
+        if(ultimaOpPagina){
+          const extra=items.filter(it=>{const x=Number(it.transform?.[4]||0);return x>=130&&x<365;}).map(it=>String(it.str||'').trim()).filter(Boolean).join(' ').replace(/\s+/g,' ').trim();
+          if(extra){
+            ultimaOpPagina.descrizione=(ultimaOpPagina.descrizione+' '+extra).replace(/\s+/g,' ').trim();
+            ultimaOpPagina.riga=(ultimaOpPagina.riga+' '+extra).replace(/\s+/g,' ').trim();
+          }
+        }
+        return;
+      }
       const [giorno,mese,anno]=String(dataItem.str).trim().split('/').map(Number);
       if(!(giorno>=1&&giorno<=31&&mese>=1&&mese<=12&&anno>=2000))return;
       if(meseDefault&&mese!==Number(meseDefault))return;
@@ -1902,7 +1912,9 @@ async function estraiOperazioniPdf(file,annoDefault,meseDefault){
       if(valore===null||Math.abs(valore)<0.01)return;
       const importo=uscita?-Math.abs(valore):Math.abs(valore);
       const descrizione=items.filter(it=>{const x=Number(it.transform?.[4]||0);return x>=130&&x<285;}).map(it=>it.str).join(' ').replace(/\s+/g,' ').trim();
-      ops.push({giorno,mese,anno,importo,descrizione:descrizione||riga,riga,pending:/da contabilizzare/i.test(riga)});
+      const op={giorno,mese,anno,importo,descrizione:descrizione||riga,riga,pending:/da contabilizzare/i.test(riga)};
+      ops.push(op);
+      ultimaOpPagina=op;
     });
   }
   return {ops,righeTotali:righe.length,pagine:pdf.numPages};
