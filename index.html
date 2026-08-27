@@ -221,7 +221,7 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
     <div class="tabs" id="tabs"></div>
   </div>
   <p class="sub" id="subtitle"></p>
-  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.08.27-01</p>
+  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.08.27-02</p>
   <p class="sub" id="cloudStatusLine">Cloud: <span id="cloudStatus" role="status" aria-live="polite">accesso richiesto</span> <span id="firebaseUserLabel"></span> <button id="firebaseLogoutBtn" class="range-btn" style="display:none;margin-left:6px">Esci</button></p>
   <div id="reminderBanner" class="hidden"></div>
   <div id="content"></div>
@@ -1870,41 +1870,38 @@ async function contenutoTestoPaginaCompat(page){
 async function estraiOperazioniPdf(file,annoDefault,meseDefault){
   const pdfjsLib=await caricaPdfJs();
   const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
-  const righe=[];
+  const ops=[],righe=[];
+  const dataCompleta=/^\d{1,2}\/\d{1,2}\/\d{4}$/;
+  const importoCompleto=/^[+\-]?(?:\d{1,3}(?:\.\d{3})*|\d+),\d{2}(?:€|EUR)?$/i;
   for(let p=1;p<=pdf.numPages;p++){
     const page=await pdf.getPage(p),content=await contenutoTestoPaginaCompat(page),byY={};
     content.items.forEach(it=>{const y=Math.round((it.transform&&it.transform[5])||0);(byY[y]=byY[y]||[]).push(it);});
-    Object.keys(byY).sort((a,b)=>b-a).forEach(y=>righe.push(byY[y].sort((a,b)=>(a.transform?.[4]||0)-(b.transform?.[4]||0)).map(x=>x.str).join(" ").replace(/\s+/g," ").trim()));
+    Object.keys(byY).sort((a,b)=>b-a).forEach(y=>{
+      const items=byY[y].sort((a,b)=>(a.transform?.[4]||0)-(b.transform?.[4]||0));
+      const riga=items.map(x=>x.str).join(' ').replace(/\s+/g,' ').trim();
+      if(riga)righe.push(riga);
+      const dataItem=items.find(it=>Number(it.transform?.[4]||0)<80&&dataCompleta.test(String(it.str||'').trim()));
+      if(!dataItem)return;
+      const [giorno,mese,anno]=String(dataItem.str).trim().split('/').map(Number);
+      if(!(giorno>=1&&giorno<=31&&mese>=1&&mese<=12&&anno>=2000))return;
+      if(meseDefault&&mese!==Number(meseDefault))return;
+      const soldi=items.map(it=>({it,x:Number(it.transform?.[4]||0),t:String(it.str||'').replace(/\s/g,'').trim()})).filter(z=>importoCompleto.test(z.t));
+      const entrata=soldi.find(z=>z.x>=285&&z.x<365);
+      const uscita=soldi.find(z=>z.x>=365&&z.x<435);
+      if(!entrata&&!uscita)return;
+      const scelto=uscita||entrata;
+      const valore=numeroItaliano(scelto.t);
+      if(valore===null||Math.abs(valore)<0.01)return;
+      const importo=uscita?-Math.abs(valore):Math.abs(valore);
+      const descrizione=items.filter(it=>{const x=Number(it.transform?.[4]||0);return x>=130&&x<285;}).map(it=>it.str).join(' ').replace(/\s+/g,' ').trim();
+      ops.push({giorno,mese,anno,importo,descrizione:descrizione||riga,riga,pending:/da contabilizzare/i.test(riga)});
+    });
   }
-  const ops=[];
-  const dataRx=/^(?:(\d{4})-(\d{1,2})-(\d{1,2})|(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4}))/;
-  // Accetta sia importi con valuta sia il formato BPER senza simbolo (es.
-  // -49,90). Le due cifre decimali obbligatorie evitano date, codici e orari.
-  const impRx=/[+\-]?\s*(?:\d{1,3}(?:\.\d{3})*|\d+)\,\d{2}\s*(?:€|EUR)?|[+\-]?\s*(?:\d{1,3}(?:,\d{3})*|\d+)\.\d{2}\s*(?:€|EUR)?/gi;
-  righe.forEach(r=>{
-    const dm=r.match(dataRx);if(!dm||dm.index>24)return;
-    let giorno,mese,anno;
-    if(dm[1]){anno=Number(dm[1]);mese=Number(dm[2]);giorno=Number(dm[3]);}
-    else{giorno=Number(dm[4]);mese=Number(dm[5]);anno=dm[6]?Number(dm[6].length===2?"20"+dm[6]:dm[6]):Number(annoDefault);}
-    if(!(giorno>=1&&giorno<=31&&mese>=1&&mese<=12&&anno>=2000))return;
-    if(!dm[6]&&meseDefault&&mese!==Number(meseDefault))return;
-    // Elimina tutte le date dalla riga prima di cercare gli importi: in molti
-    // estratti compaiono sia data contabile sia data valuta.
-    const senzaDate=r.replace(/\d{4}-\d{1,2}-\d{1,2}/g," ").replace(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}/g," ").replace(/\d{1,2}\/\d{1,2}(?![\/\d])/g," ");
-    const tokens=senzaDate.match(impRx)||[];if(!tokens.length)return;
-    let token=tokens[tokens.length-1],importo=numeroItaliano(token);if(importo===null||Math.abs(importo)<0.01)return;
-    const tokenPulito=token.trim();
-    if(!/^[+\-]/.test(tokenPulito)){
-      const positivo=/accredito|stipend|emolument|entrata|rimborso|bonifico ricevuto|versamento|incasso|interessi creditori/i.test(r);
-      importo=positivo?Math.abs(importo):-Math.abs(importo);
-    }
-    ops.push({giorno,mese,anno,importo,descrizione:r.replace(dm[0],"").replace(token,"").trim(),riga:r,pending:/da contabilizzare/i.test(r)});
-  });
   return {ops,righeTotali:righe.length,pagine:pdf.numPages};
 }
 let pdfjsPromise=null;
 async function caricaPdfJs(){
-  if(!pdfjsPromise)pdfjsPromise=import("./pdf.mjs?v=20260827-01");
+  if(!pdfjsPromise)pdfjsPromise=import("./pdf.mjs?v=20260827-02");
   const lib=await pdfjsPromise;
   lib.GlobalWorkerOptions.workerSrc="./pdf.worker.mjs";
   return lib;
