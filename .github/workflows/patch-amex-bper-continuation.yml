@@ -1,0 +1,77 @@
+name: Patch AMEX BPER continuation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-amex-bper-continuation.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch index.html
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+
+          old1="""    const page=await pdf.getPage(p),content=await contenutoTestoPaginaCompat(page),byY={};
+    content.items.forEach(it=>{const y=Math.round((it.transform&&it.transform[5])||0);(byY[y]=byY[y]||[]).push(it);});
+    Object.keys(byY).sort((a,b)=>b-a).forEach(y=>{"""
+          new1="""    const page=await pdf.getPage(p),content=await contenutoTestoPaginaCompat(page),byY={};
+    content.items.forEach(it=>{const y=Math.round((it.transform&&it.transform[5])||0);(byY[y]=byY[y]||[]).push(it);});
+    let ultimaOpPagina=null;
+    Object.keys(byY).sort((a,b)=>b-a).forEach(y=>{"""
+          if old1 not in s: raise SystemExit('ERRORE: blocco byY non trovato')
+          s=s.replace(old1,new1,1)
+
+          old2="""      const dataItem=items.find(it=>Number(it.transform?.[4]||0)<80&&dataCompleta.test(String(it.str||'').trim()));
+      if(!dataItem)return;"""
+          new2="""      const dataItem=items.find(it=>Number(it.transform?.[4]||0)<80&&dataCompleta.test(String(it.str||'').trim()));
+      if(!dataItem){
+        // BPER spezza spesso la causale su righe successive: le leghiamo al movimento
+        // precedente, così "AMERICAN EXPRESS" resta associato al relativo SDD.
+        if(ultimaOpPagina){
+          const extra=items.filter(it=>{const x=Number(it.transform?.[4]||0);return x>=130&&x<365;}).map(it=>String(it.str||'').trim()).filter(Boolean).join(' ').replace(/\\s+/g,' ').trim();
+          if(extra){
+            ultimaOpPagina.descrizione=(ultimaOpPagina.descrizione+' '+extra).replace(/\\s+/g,' ').trim();
+            ultimaOpPagina.riga=(ultimaOpPagina.riga+' '+extra).replace(/\\s+/g,' ').trim();
+          }
+        }
+        return;
+      }"""
+          if old2 not in s: raise SystemExit('ERRORE: blocco dataItem non trovato')
+          s=s.replace(old2,new2,1)
+
+          old3="""      ops.push({giorno,mese,anno,importo,descrizione:descrizione||riga,riga,pending:/da contabilizzare/i.test(riga)});"""
+          new3="""      const op={giorno,mese,anno,importo,descrizione:descrizione||riga,riga,pending:/da contabilizzare/i.test(riga)};
+      ops.push(op);
+      ultimaOpPagina=op;"""
+          if old3 not in s: raise SystemExit('ERRORE: ops.push non trovato')
+          s=s.replace(old3,new3,1)
+
+          if 'Build index: 2026.08.27-06' not in s: raise SystemExit('ERRORE: build -06 non trovata')
+          s=s.replace('Build index: 2026.08.27-06','Build index: 2026.08.27-07',1)
+          p.write_text(s,encoding='utf-8')
+          PY
+      - name: Verify
+        run: |
+          grep -F 'Build index: 2026.08.27-07' index.html
+          grep -F 'let ultimaOpPagina=null' index.html
+          grep -F "ultimaOpPagina.descrizione=" index.html
+          grep -F 'ultimaOpPagina=op' index.html
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git commit -m 'Index v2026.08.27-07: associa causale AMEX al relativo addebito BPER'
+          git push
