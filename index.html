@@ -94,7 +94,6 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
 .budget-input-wrap span{position:absolute;left:8px;top:8px;font-size:13px;color:#9C9585;}
 .budget-input-wrap input{width:120px;padding:6px 8px 6px 20px;border-radius:6px;border:1px solid var(--border-soft);font-size:13px;text-align:right;}
 .budget-total{display:flex;justify-content:space-between;padding-top:14px;font-weight:700;}
-.saldo-input{width:100px;padding:4px 6px;border-radius:5px;border:1px solid var(--border-soft);font-size:12px;}
 .footer-note{color:var(--muted);font-size:12px;margin-top:30px;text-align:center;}
 .statement-box{margin-top:18px;padding:16px;border:1px solid var(--border);border-radius:10px;background:#FAF9F5;}
 .statement-upload{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0;}
@@ -783,8 +782,7 @@ function riepilogoCassaMese(anno, mese){
 }
 
 // "Disponibile oggi": i soldi davvero tuoi adesso. Parte dal saldo del conto BPER
-// (letto in automatico dallo script, o in mancanza l'ultimo inserito a mano in
-// Saldo Conto) e lo corregge per ciò che il saldo non riflette ancora:
+// letto in automatico dallo script e lo corregge per ciò che non riflette ancora:
 //  - spese AMEX già fatte ma non ancora addebitate sul conto (si tolgono);
 //  - rate trimestrali addebitate in anticipo per i mesi successivi (si riaggiungono);
 //  - nel mese di addebito, la quota del mese se l'addebito non è ancora uscito (si toglie).
@@ -794,26 +792,18 @@ function meseCassaAmex(t){
 }
 function disponibileOggi(){
   const s = inboxStato || {};
-  let saldo, fonte, anno, mese, dataSaldo = null, automatico = false;
-  if (s.saldoBper != null && s.saldoBperData) {
-    automatico = true; saldo = Number(s.saldoBper); fonte = "BPER";
-    dataSaldo = new Date(s.saldoBperData); anno = dataSaldo.getFullYear(); mese = dataSaldo.getMonth()+1;
-  } else {
-    const saldi = Object.entries(state.saldoConto || {}).filter(([,v])=>v && Number.isFinite(Number(v.saldo))).sort((a,b)=>a[0].localeCompare(b[0]));
-    if (!saldi.length) return null;
-    const [periodo, ultimo] = saldi[saldi.length-1];
-    [anno, mese] = periodo.split("-").map(Number);
-    saldo = Number(ultimo.saldo); fonte = "manuale";
-  }
+  if (s.saldoBper == null || !s.saldoBperData) return null;
+  const saldo = Number(s.saldoBper), dataSaldo = new Date(s.saldoBperData);
+  const anno = dataSaldo.getFullYear(), mese = dataSaldo.getMonth()+1;
   // AMEX: addebitate sul conto fino al mese dell'ultimo addebito visto da BPER; senza
   // questa informazione si assume addebitato il mese del saldo (addebito a inizio mese).
   let amexFino = chiaveMese(anno, mese);
-  if (automatico && s.ultimoAddebitoAmex) { const d = new Date(s.ultimoAddebitoAmex); amexFino = chiaveMese(d.getFullYear(), d.getMonth()+1); }
+  if (s.ultimoAddebitoAmex) { const d = new Date(s.ultimoAddebitoAmex); amexFino = chiaveMese(d.getFullYear(), d.getMonth()+1); }
   const amexDaAddebitare = state.transazioni.filter(t => t.amex && t.categoria!=="Entrate")
     .filter(t => { const c = meseCassaAmex(t); return chiaveMese(c.anno, c.mese) > amexFino; })
     .reduce((x,t)=>x+Number(t.importo||0),0);
   let rateInAnticipo = quotePagateInAnticipo(anno, mese), rataNonAddebitata = 0;
-  if (automatico && s.ultimoAddebitoMutuo) {
+  if (s.ultimoAddebitoMutuo) {
     const d = new Date(s.ultimoAddebitoMutuo), addebitatoQuestoMese = d.getFullYear()===anno && d.getMonth()+1===mese;
     normalizzaSpeseTrimestrali(state.speseTrimestrali||[]).filter(cfg => /mutuo/i.test(cfg.descrizioneMatch||"")).forEach(cfg => {
       if (posizioneTrimestre(cfg, anno, mese)===0 && !addebitatoQuestoMese) {
@@ -824,7 +814,7 @@ function disponibileOggi(){
       }
     });
   }
-  return { saldo, fonte, anno, mese, dataSaldo, amexDaAddebitare, rateInAnticipo, rataNonAddebitata,
+  return { saldo, anno, mese, dataSaldo, amexDaAddebitare, rateInAnticipo, rataNonAddebitata,
     valore: saldo - amexDaAddebitare + rateInAnticipo - rataNonAddebitata };
 }
 
@@ -850,7 +840,7 @@ function renderObiettiviRisparmio(){
   const d=datiObiettiviRisparmio();
   const inputs=(state.obiettiviRisparmio||[10000,20000,30000]).map((v,i)=>`<div class="budget-input-wrap"><span>&euro;</span><input type="text" inputmode="decimal" class="obiettivo-risparmio-input" data-index="${i}" value="${v}" style="width:90px"></div>`).join('');
   const editor=`<div class="goals-editor" id="goalsEditor"><span class="sub" style="margin:0">Obiettivi:</span>${inputs}<button class="range-btn" id="salvaObiettiviBtn">Salva</button></div>`;
-  if(d.saldo==null) return `<div class="card goals-card"><div class="goals-head"><div><h3>&#127919; Obiettivi liquidità</h3><p class="sub" style="margin:4px 0 0">Inserisci un saldo reale in “Saldo Conto” per vedere avanzamento e previsioni.</p></div><button class="goals-edit" id="toggleGoalsEditor">&#9998; Modifica</button></div>${editor}</div>`;
+  if(d.saldo==null) return `<div class="card goals-card"><div class="goals-head"><div><h3>&#127919; Obiettivi liquidità</h3><p class="sub" style="margin:4px 0 0">Avanzamento e previsioni compaiono quando arriva il saldo dal conto BPER.</p></div><button class="goals-edit" id="toggleGoalsEditor">&#9998; Modifica</button></div>${editor}</div>`;
   const massimo=Math.max(...d.obiettivi.map(o=>o.valore),1), avanzamento=Math.max(0,Math.min(100,d.saldo/massimo*100));
   const markers=d.obiettivi.map(o=>{
     const pos=Math.max(5,Math.min(95,o.valore/massimo*100));
@@ -1134,9 +1124,7 @@ function currentTx(){
 function renderMeseView(){
   const years = getYears();
   const disp = disponibileOggi();
-  const quandoSaldo = !disp ? '' : disp.fonte==="BPER"
-    ? `al ${disp.dataSaldo.toLocaleDateString("it-IT")} ore ${disp.dataSaldo.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"})}`
-    : `inserito a mano, fine ${MESI[disp.mese-1].toLowerCase()} ${disp.anno}`;
+  const quandoSaldo = !disp ? '' : `al ${disp.dataSaldo.toLocaleDateString("it-IT")} ore ${disp.dataSaldo.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"})}`;
   const rigaDisp = (etichetta, valore, segno) => `<div style="display:flex;justify-content:space-between;gap:12px"><span>${etichetta}</span><span style="font-family:ui-monospace,Menlo,monospace">${segno}${eur(Math.abs(valore))}</span></div>`;
   const tx = currentTx();
   const entrate = tx.filter(t=>t.categoria==="Entrate").reduce((s,t)=>s+t.importo,0);
@@ -1211,13 +1199,13 @@ function renderMeseView(){
   ${renderInbox()}
   <div class="dashboard-top">
     <div class="card balance-hero"><div class="summary-label">Disponibile oggi</div><div class="balance-main">${disp?eur(disp.valore):'—'}</div>${disp?`
-      <div class="balance-meta" style="margin-top:4px">Saldo ${disp.fonte==="BPER"?'BPER':'conto'} <b style="color:#fff">${eur(disp.saldo)}</b> · ${escapeHtml(quandoSaldo)}</div>
+      <div class="balance-meta" style="margin-top:4px">Saldo BPER <b style="color:#fff">${eur(disp.saldo)}</b> · ${escapeHtml(quandoSaldo)}</div>
       <div class="balance-meta" style="margin-top:8px;display:grid;gap:2px;max-width:340px">
         ${rigaDisp("Saldo conto", disp.saldo, disp.saldo<0?"−":"")}
         ${disp.amexDaAddebitare?rigaDisp("Spese AMEX non ancora addebitate", disp.amexDaAddebitare, "−"):''}
         ${disp.rateInAnticipo?rigaDisp("Rate già pagate in anticipo", disp.rateInAnticipo, "+"):''}
         ${disp.rataNonAddebitata?rigaDisp("Rata del mese non ancora addebitata", disp.rataNonAddebitata, "−"):''}
-      </div>`:`<div class="balance-meta">Inserisci un saldo in Saldo Conto, oppure attiva la sincronizzazione BPER</div>`}</div>
+      </div>`:`<div class="balance-meta">In attesa del saldo dal conto BPER: arriva alla prossima sincronizzazione (Admin → Sincronizzazione automatica banca).</div>`}</div>
     <div class="summary-grid">
       <div class="card summary-card"><div class="summary-label">Entrate</div><div class="summary-value" style="color:${GREEN}">${eur(entrate)}</div>${pctBadge(pctEntrate, true)}</div>
       <div class="card summary-card"><div class="summary-label">Uscite</div><div class="summary-value" style="color:${RUST}">${eur(uscite)}</div>${pctBadge(pctUscite, false)}</div>
@@ -2090,6 +2078,10 @@ function renderSaldoView(){
     const key = m.key;
     const rec = state.saldoConto[key];
     const saldo = rec ? rec.saldo : null;
+    const meseInCorso = m.anno===oggiAnno && m.mese===oggiMese;
+    const origine = !rec || saldo==null ? '' : rec.fonte==="BPER"
+      ? `<div class="sub" style="margin:0;font-size:10px">${meseInCorso?'provvisorio, ':''}BPER ${escapeHtml(new Date(rec.data).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit"}))}</div>`
+      : `<div class="sub" style="margin:0;font-size:10px">inserito a mano</div>`;
     const idx = sortedKeys.indexOf(key);
     const prevK = idx>0 ? sortedKeys[idx-1] : null;
     const prevSaldo = prevK && state.saldoConto[prevK] ? state.saldoConto[prevK].saldo : null;
@@ -2106,7 +2098,7 @@ function renderSaldoView(){
     }
     return `<tr>
       <td style="font-weight:600">${MESI[m.mese-1].slice(0,3)} ${m.anno}</td>
-      <td><input type="text" inputmode="decimal" class="saldo-input" data-key="${key}" value="${saldo??''}" placeholder="&mdash;"></td>
+      <td style="font-family:ui-monospace,monospace">${saldo!=null?eur(saldo):'&mdash;'}${origine}</td>
       <td style="font-family:ui-monospace,monospace">${variazione!=null?eur(variazione):'&mdash;'}</td>
       <td style="font-family:ui-monospace,monospace">${eur(risparmioAggiustato)}${delta!==0?` <span class="sub" title="Aggiustato per flussi di cassa reali">*</span>`:''}</td>
       <td style="font-family:ui-monospace,monospace;color:${diff!=null?(Math.abs(diff)<=50?GREEN:RUST):NAVY}">${diff!=null?eur(diff):'&mdash;'}</td>
@@ -2117,7 +2109,7 @@ function renderSaldoView(){
   return `
   <div class="card">
     <h3>Saldo Conto — riconciliazione mensile</h3>
-    <p class="sub" style="margin-top:-8px;margin-bottom:6px">Ogni fine mese scrivi il saldo reale del conto. Il sistema controlla da solo se combacia con i movimenti registrati.</p>
+    <p class="sub" style="margin-top:-8px;margin-bottom:6px">Il saldo di fine mese arriva da solo dal conto BPER: è l’ultima lettura dello script nel mese (ogni 6 ore). Il sistema controlla se combacia con i movimenti registrati; il mese in corso resta provvisorio fino alla fine.</p>
     <p class="sub" style="margin-top:0;margin-bottom:18px">* Il risparmio teorico ricostruisce i flussi effettivi del conto: stipendio inserito come netto annuo ÷ 12 ma accreditato in 13 mensilità, Amex nel mese successivo e mutuo nei mesi gennaio, aprile, luglio e ottobre.</p>
     <table>
       <thead><tr><th>Mese</th><th>Saldo reale</th><th>Variazione</th><th>Risparmio teorico</th><th>Differenza</th><th>Esito</th></tr></thead>
@@ -3128,22 +3120,6 @@ function attachHandlers(){
       }catch(e){state.analisiEstratto={errore:e.message||"Impossibile leggere il PDF."};status.textContent="Analisi non riuscita";}
       document.getElementById("statementResult").innerHTML=renderAnalisiEstratto();analyzeBtn.disabled=false;
     };
-    document.querySelectorAll(".saldo-input").forEach(inp => {
-      inp.onchange = e => {
-        const key = inp.dataset.key;
-        const val = parseImporto(e.target.value);
-        state.saldoConto[key] = {...(state.saldoConto[key]||{}), saldo: isNaN(val)?null:val};
-        const [anno,mese]=key.split("-").map(Number), modificati=[];
-        state.transazioni.forEach(t => {
-          if (t.anno===anno && t.mese===mese) {
-            t.stato=isNaN(val)?null:"riconciliato"; t.updatedAt=Date.now(); modificati.push(t);
-          }
-        });
-        salvaMovimentiBulk(modificati, []);
-        registraAudit(isNaN(val)?"Riconciliazione rimossa":"Mese riconciliato", `${MESI[mese-1]} ${anno}`);
-        saveSaldo(); render();
-      };
-    });
   }
 
   if (state.tab === "stipendi") {
@@ -4358,6 +4334,7 @@ function initInboxSync(){
   }, err => console.error("Errore movimenti da confermare", err));
   inboxColRef.doc(INBOX_DOC_STATO).onSnapshot(d => {
     inboxStato = d.exists ? d.data() : null;
+    registraSaldoMensileDaBper();
     if (state.tab === "mese") render();
   }, err => console.error("Errore stato sincronizzazione", err));
 }
@@ -4377,6 +4354,17 @@ const REGOLE_CATEGORIA = [
   [/yada energia|enel energia|\bhera\b|\ba2a\b|\biren\b|edison|plenitude|sorgenia|octopus/i, "Elettricità/Gas"],
   [/fastweb|\btim\b|vodafone|iliad|windtre|wind tre|\bsky\b|ho\. mobile|very mobile/i, "TV/internet/Cell"]
 ];
+// Il saldo del mese in Saldo Conto è l'ultima lettura BPER di quel mese: a fine
+// mese coincide (a meno di qualche ora) con il saldo di chiusura.
+function registraSaldoMensileDaBper(){
+  const s = inboxStato || {};
+  if (s.saldoBper == null || !s.saldoBperData) return;
+  const d = new Date(s.saldoBperData), key = monthKey(d.getFullYear(), d.getMonth()+1);
+  const attuale = state.saldoConto[key];
+  if (attuale && attuale.fonte==="BPER" && attuale.data >= s.saldoBperData) return;
+  state.saldoConto[key] = {saldo: Number(s.saldoBper), fonte: "BPER", data: s.saldoBperData};
+  saveSaldo();
+}
 function categoriaProposta(it){
   if (it.entrata) return "Entrate";
   // 1. Impara dalle conferme: movimenti già importati con una causale simile.
