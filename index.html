@@ -782,15 +782,61 @@ function riepilogoCassaMese(anno, mese){
   return {entrate, uscite, risparmio:entrate-uscite};
 }
 
+// "Disponibile oggi": i soldi davvero tuoi adesso. Parte dal saldo del conto BPER
+// (letto in automatico dallo script, o in mancanza l'ultimo inserito a mano in
+// Saldo Conto) e lo corregge per ciò che il saldo non riflette ancora:
+//  - spese AMEX già fatte ma non ancora addebitate sul conto (si tolgono);
+//  - rate trimestrali addebitate in anticipo per i mesi successivi (si riaggiungono);
+//  - nel mese di addebito, la quota del mese se l'addebito non è ancora uscito (si toglie).
+function chiaveMese(anno, mese){ return anno*12+mese; }
+function meseCassaAmex(t){
+  return t.giorno ? (Number(t.giorno)>=15 ? shiftMonth(t.anno,t.mese,1) : {anno:t.anno,mese:t.mese}) : shiftMonth(t.anno,t.mese,1);
+}
+function disponibileOggi(){
+  const s = inboxStato || {};
+  let saldo, fonte, anno, mese, dataSaldo = null, automatico = false;
+  if (s.saldoBper != null && s.saldoBperData) {
+    automatico = true; saldo = Number(s.saldoBper); fonte = "BPER";
+    dataSaldo = new Date(s.saldoBperData); anno = dataSaldo.getFullYear(); mese = dataSaldo.getMonth()+1;
+  } else {
+    const saldi = Object.entries(state.saldoConto || {}).filter(([,v])=>v && Number.isFinite(Number(v.saldo))).sort((a,b)=>a[0].localeCompare(b[0]));
+    if (!saldi.length) return null;
+    const [periodo, ultimo] = saldi[saldi.length-1];
+    [anno, mese] = periodo.split("-").map(Number);
+    saldo = Number(ultimo.saldo); fonte = "manuale";
+  }
+  // AMEX: addebitate sul conto fino al mese dell'ultimo addebito visto da BPER; senza
+  // questa informazione si assume addebitato il mese del saldo (addebito a inizio mese).
+  let amexFino = chiaveMese(anno, mese);
+  if (automatico && s.ultimoAddebitoAmex) { const d = new Date(s.ultimoAddebitoAmex); amexFino = chiaveMese(d.getFullYear(), d.getMonth()+1); }
+  const amexDaAddebitare = state.transazioni.filter(t => t.amex && t.categoria!=="Entrate")
+    .filter(t => { const c = meseCassaAmex(t); return chiaveMese(c.anno, c.mese) > amexFino; })
+    .reduce((x,t)=>x+Number(t.importo||0),0);
+  let rateInAnticipo = quotePagateInAnticipo(anno, mese), rataNonAddebitata = 0;
+  if (automatico && s.ultimoAddebitoMutuo) {
+    const d = new Date(s.ultimoAddebitoMutuo), addebitatoQuestoMese = d.getFullYear()===anno && d.getMonth()+1===mese;
+    normalizzaSpeseTrimestrali(state.speseTrimestrali||[]).filter(cfg => /mutuo/i.test(cfg.descrizioneMatch||"")).forEach(cfg => {
+      if (posizioneTrimestre(cfg, anno, mese)===0 && !addebitatoQuestoMese) {
+        // Mese di addebito, ma la rata non è ancora uscita: niente anticipo, e la
+        // quota di questo mese è una spesa già di competenza ancora da pagare.
+        for (let avanti=1; avanti<=2; avanti++){ const p = shiftMonth(anno, mese, avanti); rateInAnticipo -= quotaTrimestraleMese(cfg, p.anno, p.mese); }
+        rataNonAddebitata += quotaTrimestraleMese(cfg, anno, mese);
+      }
+    });
+  }
+  return { saldo, fonte, anno, mese, dataSaldo, amexDaAddebitare, rateInAnticipo, rataNonAddebitata,
+    valore: saldo - amexDaAddebitare + rateInAnticipo - rataNonAddebitata };
+}
+
 function datiObiettiviRisparmio(){
-  const saldi = Object.entries(state.saldoConto || {}).filter(([,v])=>v && Number.isFinite(Number(v.saldo))).sort((a,b)=>a[0].localeCompare(b[0]));
-  if (!saldi.length) return {saldo:null, media:null, periodo:null, obiettivi:[]};
-  const [periodo, ultimo] = saldi[saldi.length-1];
-  const [annoSaldo,meseSaldo] = periodo.split("-").map(Number);
+  const disp = disponibileOggi();
+  if (!disp) return {saldo:null, media:null, periodo:null, obiettivi:[]};
+  const annoSaldo = disp.anno, meseSaldo = disp.mese, periodo = monthKey(annoSaldo, meseSaldo);
   // La barra obiettivi usa esattamente il "Risparmio" mostrato dall'app nei
   // sei mesi conclusi, senza rettifiche di cassa per Amex, mutuo o tredicesima.
   const media = paceMedioRisparmioRecente(6);
-  const saldo = Number(ultimo.saldo);
+  // Stesso numero della card "Disponibile oggi".
+  const saldo = disp.valore;
   const obiettivi = (state.obiettiviRisparmio||[]).map(valore=>{
     const raggiunto = saldo>=valore;
     const mesi = raggiunto ? 0 : (media>0 ? Math.ceil((valore-saldo)/media) : null);
@@ -1087,11 +1133,11 @@ function currentTx(){
 
 function renderMeseView(){
   const years = getYears();
-  const liquidita = datiObiettiviRisparmio();
-  // Il saldo di fine mese è già stato ridotto dalle rate trimestrali addebitate in
-  // anticipo per i mesi successivi: le riaggiungiamo per avere la liquidità effettiva.
-  const rateInAnticipo = liquidita.periodo ? quotePagateInAnticipo(...liquidita.periodo.split("-").map(Number)) : 0;
-  const liquiditaDisponibile = liquidita.saldo==null ? null : Number(liquidita.saldo)+rateInAnticipo;
+  const disp = disponibileOggi();
+  const quandoSaldo = !disp ? '' : disp.fonte==="BPER"
+    ? `al ${disp.dataSaldo.toLocaleDateString("it-IT")} ore ${disp.dataSaldo.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"})}`
+    : `inserito a mano, fine ${MESI[disp.mese-1].toLowerCase()} ${disp.anno}`;
+  const rigaDisp = (etichetta, valore, segno) => `<div style="display:flex;justify-content:space-between;gap:12px"><span>${etichetta}</span><span style="font-family:ui-monospace,Menlo,monospace">${segno}${eur(Math.abs(valore))}</span></div>`;
   const tx = currentTx();
   const entrate = tx.filter(t=>t.categoria==="Entrate").reduce((s,t)=>s+t.importo,0);
   const uscite = tx.filter(t=>t.categoria!=="Entrate").reduce((s,t)=>s+t.importo,0);
@@ -1164,7 +1210,14 @@ function renderMeseView(){
   </div>
   ${renderInbox()}
   <div class="dashboard-top">
-    <div class="card balance-hero"><div class="summary-label">Liquidità effettiva</div><div class="balance-main">${liquiditaDisponibile==null?'—':eur(liquiditaDisponibile)}</div><div class="balance-meta">${liquidita.periodo?('Saldo reale '+eur(liquidita.saldo)+(rateInAnticipo?' · più '+eur(rateInAnticipo)+' rate già pagate in anticipo':'')+' · '+liquidita.periodo):'Inseriscila in Saldo Conto'}</div></div>
+    <div class="card balance-hero"><div class="summary-label">Disponibile oggi</div><div class="balance-main">${disp?eur(disp.valore):'—'}</div>${disp?`
+      <div class="balance-meta" style="margin-top:4px">Saldo ${disp.fonte==="BPER"?'BPER':'conto'} <b style="color:#fff">${eur(disp.saldo)}</b> · ${escapeHtml(quandoSaldo)}</div>
+      <div class="balance-meta" style="margin-top:8px;display:grid;gap:2px;max-width:340px">
+        ${rigaDisp("Saldo conto", disp.saldo, disp.saldo<0?"−":"")}
+        ${disp.amexDaAddebitare?rigaDisp("Spese AMEX non ancora addebitate", disp.amexDaAddebitare, "−"):''}
+        ${disp.rateInAnticipo?rigaDisp("Rate già pagate in anticipo", disp.rateInAnticipo, "+"):''}
+        ${disp.rataNonAddebitata?rigaDisp("Rata del mese non ancora addebitata", disp.rataNonAddebitata, "−"):''}
+      </div>`:`<div class="balance-meta">Inserisci un saldo in Saldo Conto, oppure attiva la sincronizzazione BPER</div>`}</div>
     <div class="summary-grid">
       <div class="card summary-card"><div class="summary-label">Entrate</div><div class="summary-value" style="color:${GREEN}">${eur(entrate)}</div>${pctBadge(pctEntrate, true)}</div>
       <div class="card summary-card"><div class="summary-label">Uscite</div><div class="summary-value" style="color:${RUST}">${eur(uscite)}</div>${pctBadge(pctUscite, false)}</div>
