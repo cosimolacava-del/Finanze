@@ -221,7 +221,7 @@ td{padding:8px 4px;border-bottom:1px solid #EFEBDF;}
     <div class="tabs" id="tabs"></div>
   </div>
   <p class="sub" id="subtitle"></p>
-  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.08.28-10</p>
+  <p id="indexBuildVersion" class="sub" style="margin-top:-16px;font-family:ui-monospace,Menlo,monospace;font-size:11px">Build index: 2026.10.21-01</p>
   <p class="sub" id="cloudStatusLine">Cloud: <span id="cloudStatus" role="status" aria-live="polite">accesso richiesto</span> <span id="firebaseUserLabel"></span> <button id="firebaseLogoutBtn" class="range-btn" style="display:none;margin-left:6px">Esci</button></p>
   <div id="reminderBanner" class="hidden"></div>
   <div id="content"></div>
@@ -243,7 +243,7 @@ const firebaseConfig = {
   messagingSenderId: "715097891255",
   appId: "1:715097891255:web:8b5217dd48832dadda8832"
 };
-let db = null, auth = null, sharedDocRef = null, movimentiColRef = null, cloudReady = false;
+let db = null, auth = null, sharedDocRef = null, movimentiColRef = null, inboxColRef = null, cloudReady = false;
 try {
   if (typeof firebase !== "undefined") {
     firebase.initializeApp(firebaseConfig);
@@ -254,6 +254,9 @@ try {
     // dentro un array unico: cancellare/modificare un movimento tocca SOLO il suo
     // documento, mai gli altri — elimina alla radice i conflitti da sincronizzazione.
     movimentiColRef = db.collection("bilancio_familiare_movimenti");
+    // Movimenti scaricati in automatico (BPER via open banking, AMEX dalle email)
+    // dallo script in sync-apps-script/: restano qui finché non li confermi.
+    inboxColRef = db.collection("bilancio_familiare_inbox");
     // Diventa true solo dopo Firebase Authentication: in questo modo nessuna
     // lettura/scrittura parte prima che le Security Rules possano identificarci.
     cloudReady = false;
@@ -1147,6 +1150,7 @@ function renderMeseView(){
     <select class="big-select" id="selYear">${years.map(y=>`<option value="${y}" ${state.selYear===y?'selected':''}>${y}</option>`).join('')}</select>
     <button class="nav-btn" id="nextMonth">&#8250;</button>
   </div>
+  ${renderInbox()}
   <div class="dashboard-top">
     <div class="card balance-hero"><div class="summary-label">Liquidità effettiva</div><div class="balance-main">${liquiditaDisponibile==null?'—':eur(liquiditaDisponibile)}</div><div class="balance-meta">${liquidita.periodo?('Saldo reale '+eur(liquidita.saldo)+' · meno '+eur(accantonamentoMutuo)+' mutuo accantonato · '+liquidita.periodo):'Inseriscila in Saldo Conto'}</div></div>
     <div class="summary-grid">
@@ -2640,6 +2644,8 @@ function renderAdminView(){
     <button class="add-btn" id="salvaStipendiBtn">Salva configurazione</button>
   </div>
 
+  ${renderImpostazioniSync()}
+
   <div class="card" style="margin-bottom:20px">
     <div class="card-title-row"><h3 style="margin-bottom:0">Backup automatico su server</h3>
       <button class="add-btn" id="creaSnapshotBtn">+ Crea snapshot ora</button>
@@ -2848,6 +2854,7 @@ function attachHandlers(){
   document.querySelectorAll("[data-mobile-tab]").forEach(b=>b.onclick=()=>{state.tab=b.dataset.mobileTab;render();});
 
   if (state.tab === "mese") {
+    bindInbox();
     const prevBtn = document.getElementById("prevMonth");
     const nextBtn = document.getElementById("nextMonth");
     if (prevBtn) prevBtn.onclick = () => { goMonth(-1); };
@@ -3173,6 +3180,7 @@ function attachHandlers(){
 
   if (state.tab === "admin") {
     aggiornaControlloIntegritaCloud();
+    bindImpostazioniSync();
     const selfTestBtn=document.getElementById("selfTestBtn"); if(selfTestBtn) selfTestBtn.onclick=async()=>{const r=await eseguiAutotest();document.getElementById("selfTestResult").innerHTML=r.ok?`<span style="color:${GREEN}">✓ ${r.totale} controlli superati</span>`:`<span style="color:${RUST}">✗ ${escapeHtml(r.errori.join("; "))}</span>`;};
     document.querySelectorAll("[data-restore-trash]").forEach(b=>b.onclick=()=>{
       const x=state.cestino.find(t=>t.id===b.dataset.restoreTrash); if(!x) return;
@@ -4179,6 +4187,166 @@ function initMovimentiSync(){
   });
 }
 
+// ---------- movimenti da confermare (sincronizzazione automatica) ----------
+// Lo script Apps Script scrive in "bilancio_familiare_inbox" con stato
+// "da_confermare"; qui l'utente li conferma (diventano movimenti normali) o li
+// ignora. Il documento non viene mai cancellato: così lo script, che crea solo
+// documenti nuovi, non può riproporre un movimento già gestito.
+let inboxItems = [], inboxStato = null;
+const INBOX_DOC_STATO = "_stato_sync";
+function initInboxSync(){
+  if (!cloudReady || !inboxColRef) return;
+  inboxColRef.where("stato","in",["da_confermare"]).onSnapshot(snap => {
+    inboxItems = snap.docs.filter(d => d.id !== INBOX_DOC_STATO).map(d => ({...d.data(), id:d.id}));
+    if (state.tab === "mese") render();
+  }, err => console.error("Errore movimenti da confermare", err));
+  inboxColRef.doc(INBOX_DOC_STATO).onSnapshot(d => {
+    inboxStato = d.exists ? d.data() : null;
+    if (state.tab === "mese") render();
+  }, err => console.error("Errore stato sincronizzazione", err));
+}
+// Dalla causale bancaria tiene solo la controparte: "PAGAMENTO SU CIRCUITO
+// INTERNAZIONALE UNES SUPERMERCATI PAVIA IT Operazione carta ..." -> "UNES SUPERMERCATI PAVIA".
+function pulisciCausale(s){
+  let d = String(s||"").replace(/\s+/g," ").trim();
+  const commissioni = /^COMMISSIONI\b/i.test(d);
+  d = d.replace(/^(PAGAMENTO SU CIRCUITO INTERNAZIONALE|PAGAMENTO POS|ADDEBITO SDD|COMMISSIONI|BONIFICO( ISTANTANEO)?( o\/c:)?)\s*/i, "");
+  d = d.split(/\s+(?:Operazione carta|N:|ABI-CAB:?|ID:|a favore di)(?=\s|$)/i)[0];
+  d = d.replace(/\s+[A-Z]{2}$/, "").trim();
+  return (commissioni ? "Commissioni " : "") + (d || String(s||"").trim());
+}
+// Categorie ovvie per le controparti più comuni; valgono solo se la categoria esiste.
+const REGOLE_CATEGORIA = [
+  [/supermercat|carrefour|\bunes\b|gulliver|esselunga|\bcoop\b|conad|lidl|eurospin|cortilia|\bpam\b|iperal|despar|famila/i, "Spesa"],
+  [/yada energia|enel energia|\bhera\b|\ba2a\b|\biren\b|edison|plenitude|sorgenia|octopus/i, "Elettricità/Gas"],
+  [/fastweb|\btim\b|vodafone|iliad|windtre|wind tre|\bsky\b|ho\. mobile|very mobile/i, "TV/internet/Cell"]
+];
+function categoriaProposta(it){
+  if (it.entrata) return "Entrate";
+  // 1. Impara dalle conferme: movimenti già importati con una causale simile.
+  let best = null, bestSim = 0.5;
+  state.transazioni.forEach(t => {
+    if (!t.descrizioneBanca || t.categoria === "Entrate") return;
+    const sim = similaritaDescrizione(pulisciCausale(it.descrizione), pulisciCausale(t.descrizioneBanca));
+    if (sim > bestSim || (sim === bestSim && best && (t.updatedAt||0) > (best.updatedAt||0))) { best = t; bestSim = sim; }
+  });
+  if (best) return best.categoria;
+  // 2. Regole di base.
+  const regola = REGOLE_CATEGORIA.find(([re, cat]) => re.test(it.descrizione) && state.categorie.includes(cat));
+  if (regola) return regola[1];
+  // 3. Descrizioni scritte a mano: soglia bassa, basta una parola significativa in comune.
+  bestSim = 0.3;
+  state.transazioni.forEach(t => {
+    if (t.categoria === "Entrate") return;
+    const sim = similaritaDescrizione(pulisciCausale(it.descrizione), t.descrizione);
+    if (sim > bestSim || (sim === bestSim && best && (t.updatedAt||0) > (best.updatedAt||0))) { best = t; bestSim = sim; }
+  });
+  return best ? best.categoria : "Varie";
+}
+function possibileDuplicato(it){
+  return state.transazioni.find(t => t.anno===it.anno && t.mese===it.mese && !!t.amex===!!it.amex &&
+    (t.categoria==="Entrate")===!!it.entrata && Math.abs(Number(t.importo)-Number(it.importo))<0.01) || null;
+}
+// Impostazioni della sincronizzazione, salvate nel documento di stato e lette
+// anche dallo script: on/off, data da cui importare, parole da escludere (mutuo
+// e stipendi si registrano a mano, il mutuo mese per mese e lo stipendio su 12 mensilità).
+const ESCLUSIONI_PREDEFINITE = ["mutuo", "emolumenti", "stipendio", "retribuzion"];
+function impostazioniSync(){
+  const s = inboxStato || {};
+  return { attiva: s.syncAttiva === true, dal: s.syncDal || "", escludi: Array.isArray(s.escludi) ? s.escludi : ESCLUSIONI_PREDEFINITE };
+}
+function inboxVisibili(){
+  const imp = impostazioniSync();
+  return inboxItems.filter(it => (!imp.dal || String(it.data) >= imp.dal) &&
+    !imp.escludi.some(p => p && String(it.descrizione||"").toLowerCase().includes(String(p).toLowerCase())));
+}
+function renderImpostazioniSync(){
+  const imp = impostazioniSync(), s = inboxStato || {};
+  const esc = x => escapeHtml(String(x??"")).replace(/"/g,"&quot;");
+  const quando = x => x ? new Date(x).toLocaleString("it-IT",{dateStyle:"short",timeStyle:"short"}) : "mai";
+  return `<div class="card" style="margin-bottom:20px">
+    <h3>Sincronizzazione automatica banca</h3>
+    <p class="sub" style="margin-top:-8px;margin-bottom:14px">Lo script scarica i movimenti <b>contabilizzati</b> del conto BPER ogni 6 ore e li mette in “Da confermare” nella schermata Mese. Niente entra nel bilancio senza la tua conferma.</p>
+    <label style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><input type="checkbox" id="syncAttiva" ${imp.attiva?'checked':''}> Sincronizzazione attiva</label>
+    <label class="sub" style="display:block;margin:0 0 10px">Importa i movimenti a partire dal<br><input type="date" id="syncDal" value="${esc(imp.dal)}" style="padding:6px;border:1px solid var(--border-soft);border-radius:6px"></label>
+    <label class="sub" style="display:block;margin:0 0 10px">Non importare i movimenti la cui causale contiene (una parola per riga)<br><textarea id="syncEscludi" rows="5" style="width:100%;padding:6px;border:1px solid var(--border-soft);border-radius:6px">${esc(imp.escludi.join("\n"))}</textarea></label>
+    <button class="add-btn" id="salvaSyncBtn">Salva impostazioni</button>
+    <p class="sub" id="syncInfo" style="margin:12px 0 0">Ultima lettura BPER: ${esc(quando(s.ultimaSyncBper))} · consenso BPER valido fino al ${s.consensoBperFino?esc(new Date(s.consensoBperFino).toLocaleDateString("it-IT")):'—'}${s.paginaConsenso?` · <a href="${esc(s.paginaConsenso)}" target="_blank" rel="noopener">rinnova</a>`:''}</p>
+  </div>`;
+}
+function bindImpostazioniSync(){
+  const chk = document.getElementById("syncAttiva"), dal = document.getElementById("syncDal");
+  if (!chk) return;
+  // Alla prima attivazione si parte da oggi: i movimenti passati sono già inseriti a mano.
+  chk.onchange = () => { if (chk.checked && !dal.value) dal.value = new Date().toLocaleDateString("sv-SE"); };
+  document.getElementById("salvaSyncBtn").onclick = async () => {
+    if (!inboxColRef) { alert("Cloud non disponibile: riprova dopo il login."); return; }
+    if (chk.checked && !dal.value) dal.value = new Date().toLocaleDateString("sv-SE");
+    const escludi = document.getElementById("syncEscludi").value.split("\n").map(x=>x.trim()).filter(Boolean);
+    try {
+      await inboxColRef.doc(INBOX_DOC_STATO).set({syncAttiva: chk.checked, syncDal: dal.value, escludi, updatedAt: Date.now()}, {merge:true});
+      registraAudit("Impostazioni sincronizzazione", `${chk.checked?"attiva":"disattivata"}${dal.value?` dal ${dal.value}`:''}`);
+      alert("Impostazioni salvate.");
+    } catch(e) { alert("Non sono riuscito a salvare le impostazioni: " + e.message); }
+  };
+}
+function renderInbox(){
+  const scad = inboxStato && inboxStato.consensoBperFino ? new Date(inboxStato.consensoBperFino) : null;
+  const giorni = scad ? Math.floor((scad - Date.now())/86400000) : null;
+  const avvisoConsenso = giorni!==null && giorni<=14
+    ? `<div style="color:${RUST};font-size:13px;margin-bottom:8px">\u26A0\uFE0F Il collegamento BPER ${giorni<0?'\u00E8 scaduto':`scade tra ${giorni} giorni`}. ${inboxStato.paginaConsenso?`<a href="${escapeHtml(inboxStato.paginaConsenso).replace(/"/g,"&quot;")}" target="_blank" rel="noopener">Rinnova</a>`:''}</div>` : '';
+  const items = inboxVisibili();
+  if (!items.length) return avvisoConsenso ? `<div class="card" style="margin-bottom:16px">${avvisoConsenso}</div>` : '';
+  const esc = s => escapeHtml(String(s??"")).replace(/"/g,"&quot;");
+  const cats = ["Entrate", ...state.categorie];
+  const ultima = inboxStato && inboxStato.ultimaSyncBper ? new Date(inboxStato.ultimaSyncBper).toLocaleString("it-IT",{dateStyle:"short",timeStyle:"short"}) : null;
+  const campo = "padding:6px;border:1px solid var(--border-soft);border-radius:6px;width:100%";
+  const righe = [...items].sort((a,b)=>String(b.data).localeCompare(String(a.data))).slice(0,30).map(it => {
+    const cat = categoriaProposta(it), dup = possibileDuplicato(it);
+    return `<div class="inbox-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--border)">
+      <span style="font-size:12px;color:var(--muted);min-width:88px">${esc(new Date(it.data).toLocaleDateString("it-IT"))} \u00B7 ${it.fonte==="amex"?"AMEX":"BPER"}</span>
+      <div style="flex:1;min-width:200px;display:flex;flex-direction:column;gap:4px">
+        <label class="sub" style="margin:0;font-size:11px">Da conto<input readonly value="${esc(it.descrizione)}" title="${esc(it.descrizione)}" style="${campo};background:var(--cream);color:var(--muted);font-size:12px"></label>
+        <label class="sub" style="margin:0;font-size:11px">Descrizione da salvare<input data-inbox-descr="${esc(it.id)}" value="${esc(pulisciCausale(it.descrizione))}" style="${campo}"></label>
+      </div>
+      <b style="font-family:ui-monospace,Menlo,monospace;color:${it.entrata?GREEN:RUST}">${it.entrata?'+':'\u2212'}${eur(it.importo)}</b>
+      <select data-inbox-cat="${esc(it.id)}" style="padding:6px;border-radius:6px">${cats.map(c=>`<option ${c===cat?'selected':''}>${esc(c)}</option>`).join('')}</select>
+      <button data-inbox-ok="${esc(it.id)}" class="add-btn" style="padding:6px 10px">Conferma</button>
+      <button data-inbox-no="${esc(it.id)}" style="padding:6px 10px;border:1px solid var(--border-soft);background:#fff;border-radius:6px;cursor:pointer">Ignora</button>
+      ${dup?`<div style="flex-basis:100%;font-size:12px;color:${RUST}">\u26A0\uFE0F Possibile doppione di \u201C${esc(dup.descrizione)}\u201D (${eur(dup.importo)}) gi\u00E0 inserito a mano</div>`:''}
+    </div>`;
+  }).join('');
+  return `<div class="card" style="margin-bottom:16px">
+    <h3 style="margin-bottom:4px">\u{1F4E5} Da confermare (${items.length})</h3>
+    <div class="sub" style="margin:0 0 8px">Movimenti scaricati in automatico${ultima?` \u00B7 ultima lettura BPER ${esc(ultima)}`:''}</div>
+    ${avvisoConsenso}${righe}
+  </div>`;
+}
+function bindInbox(){
+  document.querySelectorAll("[data-inbox-ok]").forEach(b => b.onclick = () => confermaInbox(b.dataset.inboxOk));
+  document.querySelectorAll("[data-inbox-no]").forEach(b => b.onclick = () => aggiornaInbox(b.dataset.inboxNo, {stato:"ignorato"}));
+}
+function aggiornaInbox(id, campi){
+  inboxItems = inboxItems.filter(x => x.id !== id);
+  render();
+  if (!inboxColRef) return Promise.resolve();
+  return inboxColRef.doc(id).update({...campi, updatedAt:Date.now()})
+    .catch(e => { console.error("Aggiornamento movimento da confermare", e); alert("Non sono riuscito a salvare la scelta sul cloud: riprova."); });
+}
+function confermaInbox(id){
+  const it = inboxItems.find(x => x.id === id); if (!it) return;
+  const sel = document.querySelector(`[data-inbox-cat="${CSS.escape(id)}"]`);
+  const inp = document.querySelector(`[data-inbox-descr="${CSS.escape(id)}"]`);
+  const descrizione = (inp && inp.value.trim()) || pulisciCausale(it.descrizione);
+  // descrizioneBanca: la causale originale, da cui categoriaProposta impara.
+  const t = {id:uid(), anno:it.anno, mese:it.mese, giorno:it.giorno, categoria: sel ? sel.value : categoriaProposta(it),
+    descrizione, importo:Number(it.importo), amex:!!it.amex, fonte:it.fonte, inboxId:it.id, descrizioneBanca:it.descrizione,
+    createdAt:Date.now(), updatedAt:Date.now()};
+  salvaMovimento(t);
+  registraAudit("Movimento confermato da sincronizzazione", `${descrizione} \u2014 ${eur(t.importo)}`);
+  aggiornaInbox(id, {stato:"confermato", movimentoId:t.id});
+}
+
 
 // Unisce due dizionari a due livelli (es. {anno: {categoria: valore}}) senza
 // perdere chiavi presenti solo da un lato. Sui conflitti diretti (stessa chiave,
@@ -4542,7 +4710,7 @@ function avviaCloudAutenticato(user){
   setCloudStatus("\u{1F512} autenticato, sincronizzazione...");
   if(!serviziCloudAvviati){
     serviziCloudAvviati=true;
-    migraMovimentiAColezioneSeparata().then(()=>{initCloudSync();initMovimentiSync();});
+    migraMovimentiAColezioneSeparata().then(()=>{initCloudSync();initMovimentiSync();initInboxSync();});
   }
 }
 
