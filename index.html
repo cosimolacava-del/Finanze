@@ -720,28 +720,48 @@ function getYears(){
   return out;
 }
 
-// Alcune spese (es. il mutuo) vengono registrate/previste ogni mese ma la banca
-// le addebita davvero solo ogni 3 mesi in un'unica rata. Per il confronto col
-// saldo conto reale (Saldo Conto) serve il ritmo VERO di addebito, non quello
-// registrato — questa funzione calcola la differenza da applicare mese per mese.
-function aggiustamentoTrimestraleUscite(anno, mese){
-  if (!state.speseTrimestrali || state.speseTrimestrali.length === 0) return 0;
-  let delta = 0;
-  // Protezione ulteriore: anche se un vecchio dispositivo ha appena rimesso
-  // online copie della stessa configurazione, il calcolo la considera una volta sola.
-  normalizzaSpeseTrimestrali(state.speseTrimestrali).forEach(cfg => {
-    const match = (cfg.descrizioneMatch || "").toLowerCase();
-    if (!match) return;
-    const registrato = state.transazioni
-      .filter(t => t.anno===anno && t.mese===mese && t.categoria!=="Entrate" && t.descrizione.toLowerCase().includes(match))
-      .reduce((s,t)=>s+t.importo, 0);
-    // mesi trascorsi dal mese di riferimento (può essere negativo se anno/mese precede l'ancora)
-    const diffMesi = (anno*12+mese) - (cfg.prossimaRataAnno*12+cfg.prossimaRataMese);
-    const isMesePagamento = ((diffMesi % 3) + 3) % 3 === 0;
-    const realeDelMese = isMesePagamento ? registrato*3 : 0;
-    delta += (realeDelMese - registrato);
-  });
-  return delta;
+// Alcune spese (es. il mutuo) sono registrate ogni mese ma la banca le addebita
+// ogni 3 mesi, IN ANTICIPO: l'addebito del mese di pagamento copre quel mese e
+// i due successivi. Il bilancio resta mensile; queste funzioni servono solo ai
+// calcoli di cassa (Saldo Conto, confronto estratto, liquidità effettiva).
+
+// Posizione nel trimestre: 0 = mese di addebito, 1 e 2 = mesi già coperti.
+function posizioneTrimestre(cfg, anno, mese){
+  const diff = (anno*12+mese) - (cfg.prossimaRataAnno*12+cfg.prossimaRataMese);
+  return ((diff%3)+3)%3;
+}
+// Quota mensile: quella registrata. Fino al mese corrente vale solo il registrato;
+// per i mesi futuri, non ancora generati, si stima con la ricorrenza attiva o,
+// in mancanza, con l'ultima quota registrata.
+function quotaTrimestraleMese(cfg, anno, mese){
+  const match = String(cfg.descrizioneMatch||"").toLowerCase();
+  if (!match) return 0;
+  const corrisponde = x => String(x.descrizione||"").toLowerCase().includes(match);
+  const registrate = state.transazioni.filter(t => t.categoria!=="Entrate" && t.anno===anno && t.mese===mese && corrisponde(t));
+  if (registrate.length) return registrate.reduce((s,t)=>s+t.importo,0);
+  const k = anno*12+mese, oggi = new Date();
+  if (k <= oggi.getFullYear()*12+oggi.getMonth()+1) return 0;
+  const regole = (state.ricorrenti||[]).filter(r => r.categoria!=="Entrate" && corrisponde(r) &&
+    k >= r.dalAnno*12+r.dalMese && (!r.alAnno || k <= r.alAnno*12+r.alMese));
+  if (regole.length) return regole.some(r => (r.mesiSaltati||[]).some(s => s.anno===anno && s.mese===mese)) ? 0 : Number(regole[0].importo)||0;
+  const precedenti = state.transazioni.filter(t => t.categoria!=="Entrate" && corrisponde(t) && t.anno*12+t.mese < k);
+  if (!precedenti.length) return 0;
+  const ultimoK = Math.max(...precedenti.map(t => t.anno*12+t.mese));
+  return precedenti.filter(t => t.anno*12+t.mese === ultimoK).reduce((s,t)=>s+t.importo,0);
+}
+// Importo addebitato dalla banca nel mese (0 se non è un mese di addebito).
+function addebitoTrimestraleMese(cfg, anno, mese){
+  if (posizioneTrimestre(cfg, anno, mese) !== 0) return 0;
+  let totale = 0;
+  for (let avanti=0; avanti<3; avanti++){ const p = shiftMonth(anno, mese, avanti); totale += quotaTrimestraleMese(cfg, p.anno, p.mese); }
+  return totale;
+}
+// A fine mese: quote dei mesi successivi già addebitate in anticipo.
+function quotePagateInAnticipo(anno, mese){
+  return normalizzaSpeseTrimestrali(state.speseTrimestrali||[]).reduce((tot, cfg) => {
+    for (let avanti=1; avanti<=2-posizioneTrimestre(cfg, anno, mese); avanti++){ const p = shiftMonth(anno, mese, avanti); tot += quotaTrimestraleMese(cfg, p.anno, p.mese); }
+    return tot;
+  }, 0);
 }
 
 function riepilogoCassaMese(anno, mese){
@@ -755,14 +775,7 @@ function riepilogoCassaMese(anno, mese){
     const addebito = t.amex ? (t.giorno ? (Number(t.giorno)>=15 ? shiftMonth(t.anno,t.mese,1) : {anno:t.anno,mese:t.mese}) : shiftMonth(t.anno,t.mese,1)) : {anno:t.anno,mese:t.mese};
     if (addebito.anno===anno && addebito.mese===mese) uscite += t.importo;
   });
-  configurazioni.forEach(cfg => {
-    const diff = (anno*12+mese) - (cfg.prossimaRataAnno*12+cfg.prossimaRataMese);
-    if ((((diff%3)+3)%3)!==0) return;
-    for(let indietro=0; indietro<3; indietro++){
-      const periodo=shiftMonth(anno,mese,-indietro);
-      uscite += state.transazioni.filter(t => t.categoria!=="Entrate" && t.anno===periodo.anno && t.mese===periodo.mese && String(t.descrizione||"").toLowerCase().includes(String(cfg.descrizioneMatch||"").toLowerCase())).reduce((s,t)=>s+t.importo,0);
-    }
-  });
+  configurazioni.forEach(cfg => { uscite += addebitoTrimestraleMese(cfg, anno, mese); });
   return {entrate, uscite, risparmio:entrate-uscite};
 }
 
@@ -1072,14 +1085,10 @@ function currentTx(){
 function renderMeseView(){
   const years = getYears();
   const liquidita = datiObiettiviRisparmio();
-  const accantonamentoMutuo = (()=>{
-    if(!liquidita.periodo) return 0;
-    const [ay,am]=liquidita.periodo.split("-").map(Number);
-    const cfgs=normalizzaSpeseTrimestrali(state.speseTrimestrali||[]).filter(cfg=>/mutuo/i.test(String(cfg.descrizioneMatch||"")));
-    if(!cfgs.length) return 0;
-    return state.transazioni.filter(t=>t.anno===ay&&t.mese===am&&t.categoria!=="Entrate"&&cfgs.some(cfg=>String(t.descrizione||"").toLowerCase().includes(String(cfg.descrizioneMatch||"").toLowerCase()))).reduce((sum,t)=>sum+Number(t.importo||0),0);
-  })();
-  const liquiditaDisponibile = liquidita.saldo==null ? null : Number(liquidita.saldo)-accantonamentoMutuo;
+  // Il saldo di fine mese è già stato ridotto dalle rate trimestrali addebitate in
+  // anticipo per i mesi successivi: le riaggiungiamo per avere la liquidità effettiva.
+  const rateInAnticipo = liquidita.periodo ? quotePagateInAnticipo(...liquidita.periodo.split("-").map(Number)) : 0;
+  const liquiditaDisponibile = liquidita.saldo==null ? null : Number(liquidita.saldo)+rateInAnticipo;
   const tx = currentTx();
   const entrate = tx.filter(t=>t.categoria==="Entrate").reduce((s,t)=>s+t.importo,0);
   const uscite = tx.filter(t=>t.categoria!=="Entrate").reduce((s,t)=>s+t.importo,0);
@@ -1152,7 +1161,7 @@ function renderMeseView(){
   </div>
   ${renderInbox()}
   <div class="dashboard-top">
-    <div class="card balance-hero"><div class="summary-label">Liquidità effettiva</div><div class="balance-main">${liquiditaDisponibile==null?'—':eur(liquiditaDisponibile)}</div><div class="balance-meta">${liquidita.periodo?('Saldo reale '+eur(liquidita.saldo)+' · meno '+eur(accantonamentoMutuo)+' mutuo accantonato · '+liquidita.periodo):'Inseriscila in Saldo Conto'}</div></div>
+    <div class="card balance-hero"><div class="summary-label">Liquidità effettiva</div><div class="balance-main">${liquiditaDisponibile==null?'—':eur(liquiditaDisponibile)}</div><div class="balance-meta">${liquidita.periodo?('Saldo reale '+eur(liquidita.saldo)+(rateInAnticipo?' · più '+eur(rateInAnticipo)+' rate già pagate in anticipo':'')+' · '+liquidita.periodo):'Inseriscila in Saldo Conto'}</div></div>
     <div class="summary-grid">
       <div class="card summary-card"><div class="summary-label">Entrate</div><div class="summary-value" style="color:${GREEN}">${eur(entrate)}</div>${pctBadge(pctEntrate, true)}</div>
       <div class="card summary-card"><div class="summary-label">Uscite</div><div class="summary-value" style="color:${RUST}">${eur(uscite)}</div>${pctBadge(pctUscite, false)}</div>
@@ -1837,13 +1846,7 @@ function operazioniCassaAttese(anno, mese){
     if(cash.anno===anno&&cash.mese===mese)out.push({segno:-1,importo:t.importo,descrizione:t.descrizione,giorno:t.giorno||null,tipo:t.amex?"amex":"uscita",id:t.id});
   });
   trimestrali.forEach(cfg=>{
-    const diff=(anno*12+mese)-(cfg.prossimaRataAnno*12+cfg.prossimaRataMese);
-    if((((diff%3)+3)%3)!==0)return;
-    let totale=0;
-    for(let i=0;i<3;i++){
-      const p=shiftMonth(anno,mese,-i);
-      totale+=state.transazioni.filter(t=>t.categoria!=="Entrate"&&t.anno===p.anno&&t.mese===p.mese&&String(t.descrizione||"").toLowerCase().includes(String(cfg.descrizioneMatch||"").toLowerCase())).reduce((s,t)=>s+t.importo,0);
-    }
+    const totale=addebitoTrimestraleMese(cfg,anno,mese);
     if(totale)out.push({segno:-1,importo:totale,descrizione:cfg.descrizioneMatch||"Rata trimestrale",giorno:null,tipo:"trimestrale",id:"trim-"+anno+"-"+mese+"-"+cfg.descrizioneMatch});
   });
   return out;
@@ -4625,8 +4628,12 @@ async function pulisciSnapshotGiornalieriVecchi(){
   if (!cloudReady) return;
   try {
     const soglia = Date.now() - 30*24*60*60*1000;
-    const q = await snapshotsCollection().where("tipo","==","giornaliero").where("createdAt","<",soglia).get();
-    for (const doc of q.docs) { await snapshotsCollection().doc(doc.id).delete(); }
+    // Filtro solo per data (indice automatico) e tipo qui sotto: con due filtri
+    // insieme Firestore richiederebbe un indice composto, mai creato.
+    const q = await snapshotsCollection().where("createdAt","<",soglia).get();
+    for (const doc of q.docs) {
+      if (doc.data().tipo === "giornaliero") await snapshotsCollection().doc(doc.id).delete();
+    }
   } catch(e) { console.error("Errore pulizia snapshot giornalieri", e); }
 }
 
