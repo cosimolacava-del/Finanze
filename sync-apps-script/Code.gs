@@ -159,9 +159,18 @@ function sincronizzaBper() {
   if (!accounts.length) return;
   // Chiediamo sempre l'ultima settimana (la banca contabilizza in ritardo); la data
   // di partenza scelta nell'app si applica alla data d'acquisto, in inboxDaBper.
-  const da = new Date(Date.now() - GIORNI_RILETTURA * 86400000).toISOString().slice(0, 10);
-  let nuovi = 0;
+  // La prima volta si guarda indietro di 45 giorni per trovare l'ultimo addebito
+  // AMEX e mutuo (i movimenti vecchi sono comunque scartati dalla data di partenza).
+  const giorni = prop("ULTIMO_ADDEBITO_AMEX", "") && prop("ULTIMO_ADDEBITO_MUTUO", "") ? GIORNI_RILETTURA : 45;
+  const da = new Date(Date.now() - giorni * 86400000).toISOString().slice(0, 10);
+  let nuovi = 0, saldo = null;
   accounts.forEach(acc => {
+    // Il saldo serve all'indicatore "Disponibile oggi": se la banca non lo dà,
+    // i movimenti si sincronizzano comunque.
+    try {
+      const s = leggiSaldo(acc);
+      if (s) saldo = saldo ? { importo: saldo.importo + s.importo, tipo: s.tipo, data: s.data } : s;
+    } catch (e) { console.log("Saldo BPER non disponibile: " + e.message); }
     let cont = null;
     do {
       const q = "?date_from=" + da + "&transaction_status=BOOK" + (cont ? "&continuation_key=" + encodeURIComponent(cont) : "");
@@ -171,8 +180,33 @@ function sincronizzaBper() {
     } while (cont);
   });
   setProp("ULTIMA_SYNC_BPER", new Date().toISOString());
+  if (saldo) {
+    setProp("SALDO_BPER", String(saldo.importo));
+    setProp("SALDO_BPER_TIPO", saldo.tipo);
+    setProp("SALDO_BPER_DATA", saldo.data);
+  }
   scriviStato();
-  console.log("BPER: " + nuovi + " nuovi movimenti");
+  console.log("BPER: " + nuovi + " nuovi movimenti" + (saldo ? ", saldo " + saldo.importo + " (" + saldo.tipo + ")" : ""));
+}
+
+// Saldo contabile (solo movimenti contabilizzati, coerente con l'import); se la
+// banca non lo fornisce si ripiega su quello disponibile.
+const PREFERENZA_SALDO = ["ITBD", "CLBD", "XPCD", "ITAV", "CLAV"];
+function leggiSaldo(acc) {
+  const lista = eb("get", "/accounts/" + acc + "/balances").balances || [];
+  const scelto = PREFERENZA_SALDO.map(tipo => lista.find(b => b.balance_type === tipo)).find(Boolean) || lista[0];
+  if (!scelto) return null;
+  return {
+    importo: Number(scelto.balance_amount.amount),
+    tipo: scelto.balance_type,
+    data: scelto.last_change_date_time || scelto.reference_date || new Date().toISOString()
+  };
+}
+
+// Data dell'ultimo addebito visto sul conto per AMEX e mutuo: l'app la usa per
+// sapere se l'addebito di questo mese è già uscito dal saldo.
+function ricordaAddebito(chiave, data) {
+  if (data && data > prop(chiave, "")) setProp(chiave, data);
 }
 
 function inboxDaBper(acc, t, imp) {
@@ -180,9 +214,10 @@ function inboxDaBper(acc, t, imp) {
   if (t.status ? t.status !== "BOOK" : !t.booking_date) return false;
   const descr = [].concat(t.remittance_information || []).join(" ").trim()
     || (t.creditor && t.creditor.name) || (t.debtor && t.debtor.name) || "Movimento BPER";
-  // L'addebito mensile AMEX arriva già spezzato acquisto per acquisto dalle email:
+  if (/\bmutuo\b/i.test(descr)) ricordaAddebito("ULTIMO_ADDEBITO_MUTUO", t.booking_date);
+  // L'addebito mensile AMEX: le spese le registri tu una per una con la spunta AMEX;
   // come fa l'app nella riconciliazione, lo escludiamo per non contarlo due volte.
-  if (/\b(american express|americanexpress|amex)\b/i.test(descr)) return false;
+  if (/\b(american express|americanexpress|amex)\b/i.test(descr)) { ricordaAddebito("ULTIMO_ADDEBITO_AMEX", t.booking_date); return false; }
   // Per il bilancio conta il giorno dell'acquisto, non quello di contabilizzazione:
   // le spese con carta BPER lo riportano nella causale ("... del 16.10.2026").
   const mDel = descr.match(/\bdel (\d{2})\.(\d{2})\.(\d{4})\b/);
@@ -305,7 +340,12 @@ function scriviStato() {
     ultimaSyncBper: prop("ULTIMA_SYNC_BPER", ""),
     ultimaSyncAmex: prop("ULTIMA_SYNC_AMEX", ""),
     consensoBperFino: prop("EB_VALID_UNTIL", ""),
-    paginaConsenso: prop("WEB_APP_URL", "")
+    paginaConsenso: prop("WEB_APP_URL", ""),
+    saldoBper: prop("SALDO_BPER", "") === "" ? null : Number(prop("SALDO_BPER")),
+    saldoBperTipo: prop("SALDO_BPER_TIPO", ""),
+    saldoBperData: prop("SALDO_BPER_DATA", ""),
+    ultimoAddebitoAmex: prop("ULTIMO_ADDEBITO_AMEX", ""),
+    ultimoAddebitoMutuo: prop("ULTIMO_ADDEBITO_MUTUO", "")
   };
   // updateMask: aggiorna solo questi campi, senza toccare le impostazioni scelte nell'app.
   const mask = Object.keys(stato).map(k => "updateMask.fieldPaths=" + k).join("&");
