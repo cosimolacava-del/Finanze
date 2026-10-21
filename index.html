@@ -243,7 +243,7 @@ const firebaseConfig = {
   messagingSenderId: "715097891255",
   appId: "1:715097891255:web:8b5217dd48832dadda8832"
 };
-let db = null, auth = null, sharedDocRef = null, movimentiColRef = null, inboxColRef = null, cloudReady = false;
+let db = null, auth = null, sharedDocRef = null, movimentiColRef = null, cancellatiColRef = null, inboxColRef = null, cloudReady = false;
 try {
   if (typeof firebase !== "undefined") {
     firebase.initializeApp(firebaseConfig);
@@ -254,6 +254,9 @@ try {
     // dentro un array unico: cancellare/modificare un movimento tocca SOLO il suo
     // documento, mai gli altri — elimina alla radice i conflitti da sincronizzazione.
     movimentiColRef = db.collection("bilancio_familiare_movimenti");
+    // "Lapidi" dei movimenti cancellati: permettono agli altri dispositivi di
+    // accorgersi delle cancellazioni leggendo solo i cambiamenti recenti.
+    cancellatiColRef = db.collection("bilancio_familiare_cancellati");
     // Movimenti scaricati in automatico (BPER via open banking, AMEX dalle email)
     // dallo script in sync-apps-script/: restano qui finché non li confermi.
     inboxColRef = db.collection("bilancio_familiare_inbox");
@@ -3679,11 +3682,11 @@ async function sostituisciMovimentiCloud(nuovi){
     const operazioni = [];
     tutti.docs.forEach(d => { if (!nuoviPerId.has(d.id)) operazioni.push({tipo:"del", id:d.id}); });
     nuovi.forEach(t => operazioni.push({tipo:"set", t}));
-    for (let i=0; i<operazioni.length; i+=450){
+    for (let i=0; i<operazioni.length; i+=225){
       const batch = db.batch();
-      operazioni.slice(i,i+450).forEach(op => {
-        if (op.tipo==="set") batch.set(movimentiColRef.doc(op.t.id), op.t);
-        else batch.delete(movimentiColRef.doc(op.id));
+      operazioni.slice(i,i+225).forEach(op => {
+        if (op.tipo==="set") batch.set(movimentiColRef.doc(op.t.id), conOraServer(op.t));
+        else cancellaMovimentoInBatch(batch, op.id);
       });
       await batch.commit();
     }
@@ -4052,13 +4055,28 @@ async function pushToCloud(){
 // documento per movimento, due dispositivi che toccano movimenti diversi non
 // si scontrano mai — e non serve più "ricordarsi" delle cancellazioni: una
 // cancellazione vera su un documento vero non può tornare indietro per sbaglio.
+// Ogni scrittura sul cloud porta l'ora del server (_syncAt): all'apertura l'app
+// chiede a Firestore solo i movimenti cambiati dopo l'ultima volta, invece di
+// rileggerli tutti (~3.000 letture a ogni apertura, oltre la quota gratuita).
+function conOraServer(o){
+  const {_syncAt, ...resto} = o;
+  return {...resto, _syncAt: firebase.firestore.FieldValue.serverTimestamp()};
+}
+function senzaMetaSync(o){ const {_syncAt, ...resto} = o; return resto; }
+// Una cancellazione lascia una "lapide" con l'ora del server: gli altri
+// dispositivi la vedono anche leggendo solo i cambiamenti. 2 operazioni per batch.
+function cancellaMovimentoInBatch(batch, id){
+  batch.delete(movimentiColRef.doc(id));
+  batch.set(cancellatiColRef.doc(id), conOraServer({id}));
+}
+
 function salvaMovimento(t){
   const idx = state.transazioni.findIndex(x => x.id === t.id);
   if (idx >= 0) state.transazioni[idx] = t; else state.transazioni.push(t);
   localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
   segnaPendingSet(t);
   if (!applyingRemoteUpdate && movimentiColRef) {
-    movimentiColRef.doc(t.id).set(t)
+    movimentiColRef.doc(t.id).set(conOraServer(t))
       .then(() => { confermaPending(t.id, "set"); localStorage.setItem("bilancio_ultima_sync_ok",String(Date.now())); setCloudStatus("\u2601\uFE0F sincronizzato"); })
       .catch(e => { console.error("Errore salvataggio movimento", e); setCloudStatus("\u26A0\uFE0F offline (solo locale)"); });
   }
@@ -4079,23 +4097,37 @@ async function eseguiAutotest(){
   return {ok:errori.length===0,errori,totale:9};
 }
 
-async function aggiornaControlloIntegritaCloud(){
+// Il controllo rilegge tutti i movimenti dal server (una lettura per movimento):
+// automatico al massimo una volta al giorno, altrimenti con "Verifica ora".
+const CONTROLLO_CLOUD_KEY = "bilancio_controllo_cloud";
+async function aggiornaControlloIntegritaCloud(forza){
   const el=document.getElementById("cloudIntegrityStatus"); if(!el) return;
-  if(!cloudReady||!movimentiColRef){el.innerHTML=`<span style="color:${RUST}">Cloud non disponibile: le modifiche restano protette nella coda locale.</span>`;return;}
+  const mostra=html=>{const c=document.getElementById("cloudIntegrityStatus"); if(c) c.innerHTML=html+` <button class="range-btn" id="verificaCloudBtn" style="margin-left:6px">Verifica ora</button>`; const b=document.getElementById("verificaCloudBtn"); if(b) b.onclick=()=>aggiornaControlloIntegritaCloud(true);};
+  if(!cloudReady||!movimentiColRef){mostra(`<span style="color:${RUST}">Cloud non disponibile: le modifiche restano protette nella coda locale.</span>`);return;}
+  let precedente=null; try{precedente=JSON.parse(localStorage.getItem(CONTROLLO_CLOUD_KEY)||"null");}catch(_){}
+  if(!forza && precedente && Date.now()-precedente.ts < 86400000){
+    modalitaPrudente=!precedente.coerente;
+    mostra(`${precedente.html} <span class="sub">(controllato ${escapeHtml(fmtDataOra(precedente.ts))})</span>`);
+    return;
+  }
   try{
     const q=await movimentiColRef.get(), pending=leggiPendingMovimenti();
     const nPending=Object.keys(pending.set).length+Object.keys(pending.del).length;
     const coerente=q.size===state.transazioni.length || nPending>0;
     modalitaPrudente=!coerente;
-    const corrente=document.getElementById("cloudIntegrityStatus"); if(corrente) corrente.innerHTML=coerente?`<span style="color:${GREEN}">✓ Cloud raggiungibile: ${q.size} movimenti sul server.</span>`:`<span style="color:${RUST}">⚠ Differenza da controllare: ${state.transazioni.length} locali, ${q.size} sul server. Non eseguire ripristini finché la sincronizzazione non termina.</span>`;
-  }catch(e){modalitaPrudente=true;const corrente=document.getElementById("cloudIntegrityStatus");if(corrente)corrente.innerHTML=`<span style="color:${RUST}">Controllo cloud non riuscito: ${escapeHtml(e.message)}</span>`;}
+    const html=coerente?`<span style="color:${GREEN}">✓ Cloud raggiungibile: ${q.size} movimenti sul server.</span>`:`<span style="color:${RUST}">⚠ Differenza da controllare: ${state.transazioni.length} locali, ${q.size} sul server. Non eseguire ripristini finché la sincronizzazione non termina.</span>`;
+    localStorage.setItem(CONTROLLO_CLOUD_KEY, JSON.stringify({ts:Date.now(), coerente, html}));
+    mostra(html);
+  }catch(e){modalitaPrudente=true;mostra(`<span style="color:${RUST}">Controllo cloud non riuscito: ${escapeHtml(e.message)}</span>`);}
 }
 function cancellaMovimento(id){
   state.transazioni = state.transazioni.filter(x => x.id !== id);
   localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
   segnaPendingDelete(id);
   if (!applyingRemoteUpdate && movimentiColRef) {
-    movimentiColRef.doc(id).delete()
+    const batch = db.batch();
+    cancellaMovimentoInBatch(batch, id);
+    batch.commit()
       .then(() => { confermaPending(id, "del"); localStorage.setItem("bilancio_ultima_sync_ok",String(Date.now())); setCloudStatus("\u2601\uFE0F sincronizzato"); })
       .catch(e => { console.error("Errore cancellazione movimento", e); setCloudStatus("\u26A0\uFE0F offline (solo locale)"); });
   }
@@ -4111,14 +4143,15 @@ async function salvaMovimentiBulk(daScrivere, daCancellare){
   if (applyingRemoteUpdate || !movimentiColRef || (daScrivere.length===0 && daCancellare.length===0)) return;
   const operazioni = [...daScrivere.map(t=>({tipo:"set",t})), ...daCancellare.map(id=>({tipo:"del",id}))];
   try {
-    for (let i=0; i<operazioni.length; i+=450){
+    // 225 per batch: una cancellazione sono 2 scritture (movimento + lapide), limite 500.
+    for (let i=0; i<operazioni.length; i+=225){
       const batch = db.batch();
-      operazioni.slice(i,i+450).forEach(op => {
-        if (op.tipo==="set") batch.set(movimentiColRef.doc(op.t.id), op.t);
-        else batch.delete(movimentiColRef.doc(op.id));
+      operazioni.slice(i,i+225).forEach(op => {
+        if (op.tipo==="set") batch.set(movimentiColRef.doc(op.t.id), conOraServer(op.t));
+        else cancellaMovimentoInBatch(batch, op.id);
       });
       await batch.commit();
-      operazioni.slice(i,i+450).forEach(op => confermaPending(op.tipo==="set" ? op.t.id : op.id, op.tipo==="set" ? "set" : "del"));
+      operazioni.slice(i,i+225).forEach(op => confermaPending(op.tipo==="set" ? op.t.id : op.id, op.tipo==="set" ? "set" : "del"));
     }
     localStorage.setItem("bilancio_ultima_sync_ok",String(Date.now()));
     setCloudStatus("\u2601\uFE0F sincronizzato");
@@ -4135,12 +4168,75 @@ async function salvaMovimentiBulk(daScrivere, daCancellare){
 // primo collegamento quindi sostituisce lo stato locale con la fotografia
 // completa e reale del server, non solo le differenze.
 let primoSnapshotMovimenti = true;
+// Ora del server (in ms) dell'ultimo cambiamento visto: alla prossima apertura
+// si leggono solo i documenti più recenti di così (meno un margine di sicurezza).
+const CHECKPOINT_MOVIMENTI_KEY = "bilancio_movimenti_checkpoint";
+const SYNC_COMPLETA_KEY = "bilancio_movimenti_sync_completa";
+const MARGINE_CHECKPOINT_MS = 10*60*1000;
+const GIORNI_TRA_SYNC_COMPLETE = 7;
+// Per ogni movimento, l'ora del cambiamento più recente applicato: una lapide
+// vecchia non deve cancellare un movimento ricreato dopo (es. ripristino dal cestino).
+const ultimoCambiamentoApplicato = {};
+function oraServer(doc){ const ts = doc.get("_syncAt"); return ts && ts.toMillis ? ts.toMillis() : null; }
+function aggiornaCheckpoint(ms){
+  if (ms && ms > Number(localStorage.getItem(CHECKPOINT_MOVIMENTI_KEY)||0)) localStorage.setItem(CHECKPOINT_MOVIMENTI_KEY, String(ms));
+}
+function dopoCambiamentiMovimenti(){
+  localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
+  applyingRemoteUpdate = false;
+  sincronizzaPendingMovimenti();
+  generaMovimentiRicorrenti();
+  render();
+  setCloudStatus("☁️ sincronizzato");
+}
+function applicaMovimentoRemoto(id, dati, ms){
+  if (ms != null && ultimoCambiamentoApplicato[id] != null && ms < ultimoCambiamentoApplicato[id]) return;
+  if (ms != null) ultimoCambiamentoApplicato[id] = ms;
+  const t = {...senzaMetaSync(dati), id};
+  const idx = state.transazioni.findIndex(x => x.id === id);
+  if (idx >= 0) state.transazioni[idx] = t; else state.transazioni.push(t);
+}
+function applicaCancellazioneRemota(id, ms){
+  if (ms != null && ultimoCambiamentoApplicato[id] != null && ms < ultimoCambiamentoApplicato[id]) return;
+  if (ms != null) ultimoCambiamentoApplicato[id] = ms;
+  state.transazioni = state.transazioni.filter(x => x.id !== id);
+}
+// Modalità normale: solo i movimenti scritti dopo il checkpoint.
+function processaDeltaMovimenti(snapshot){
+  if (sostituzioneMovimentiInCorso) return;
+  applyingRemoteUpdate = true;
+  snapshot.docChanges().forEach(change => {
+    // Le proprie scritture in attesa sono già nello stato locale.
+    if (change.doc.metadata.hasPendingWrites) return;
+    const ms = oraServer(change.doc);
+    // "removed": il documento è uscito dai risultati, cioè è stato cancellato
+    // (anche da un dispositivo con una versione vecchia dell'app, senza lapide).
+    if (change.type === "removed") applicaCancellazioneRemota(change.doc.id, null);
+    else { applicaMovimentoRemoto(change.doc.id, change.doc.data(), ms); aggiornaCheckpoint(ms); }
+  });
+  dopoCambiamentiMovimenti();
+}
+function processaLapidi(snapshot){
+  if (sostituzioneMovimentiInCorso) return;
+  applyingRemoteUpdate = true;
+  snapshot.docChanges().forEach(change => {
+    if (change.type === "removed" || change.doc.metadata.hasPendingWrites) return;
+    const ms = oraServer(change.doc);
+    applicaCancellazioneRemota(change.doc.id, ms);
+    aggiornaCheckpoint(ms);
+  });
+  dopoCambiamentiMovimenti();
+}
 function processaSnapshotMovimenti(snapshot){
   if (sostituzioneMovimentiInCorso) return;
   applyingRemoteUpdate = true;
   if (primoSnapshotMovimenti) {
     const daServer = {};
-    snapshot.forEach(doc => { daServer[doc.id] = {...doc.data(), id: doc.id}; });
+    let massimo = null;
+    snapshot.forEach(doc => {
+      daServer[doc.id] = {...senzaMetaSync(doc.data()), id: doc.id};
+      const ms = oraServer(doc); if (ms && (!massimo || ms > massimo)) massimo = ms;
+    });
     const numSulServer = Object.keys(daServer).length;
     // Prudenza: se il server risulta vuoto (o quasi) mentre in locale c'è già
     // molto di più, è molto più probabile un problema di sincronizzazione
@@ -4163,31 +4259,35 @@ function processaSnapshotMovimenti(snapshot){
     Object.values(pending.set).forEach(t => { daServer[t.id] = t; });
     Object.keys(pending.del).forEach(id => { delete daServer[id]; });
     state.transazioni = Object.values(daServer);
+    // I movimenti scritti prima di questa versione non hanno ancora l'ora del
+    // server: in quel caso si riparte da un'ora fa.
+    localStorage.setItem(CHECKPOINT_MOVIMENTI_KEY, String(massimo || Date.now()-60*60*1000));
+    localStorage.setItem(SYNC_COMPLETA_KEY, String(Date.now()));
   } else {
     snapshot.docChanges().forEach(change => {
       const id = change.doc.id;
-      if (change.type === "removed") {
-        state.transazioni = state.transazioni.filter(x => x.id !== id);
-      } else {
-        const data = change.doc.data();
-        const idx = state.transazioni.findIndex(x => x.id === id);
-        if (idx >= 0) state.transazioni[idx] = {...data, id}; else state.transazioni.push({...data, id});
-      }
+      if (change.type === "removed") applicaCancellazioneRemota(id, null);
+      else { const ms = oraServer(change.doc); applicaMovimentoRemoto(id, change.doc.data(), ms); aggiornaCheckpoint(ms); }
     });
   }
-  localStorage.setItem("bilancio_transazioni", JSON.stringify(state.transazioni));
-  applyingRemoteUpdate = false;
-  sincronizzaPendingMovimenti();
-  generaMovimentiRicorrenti();
-  render();
-  setCloudStatus("\u2601\uFE0F sincronizzato");
+  dopoCambiamentiMovimenti();
 }
 function initMovimentiSync(){
   if (!cloudReady || !movimentiColRef) return;
-  movimentiColRef.onSnapshot(processaSnapshotMovimenti, (err) => {
+  const errore = (err) => {
     console.error("Errore sincronizzazione movimenti", err);
     setCloudStatus("\u26A0\uFE0F offline (solo locale)");
-  });
+  };
+  const checkpoint = Number(localStorage.getItem(CHECKPOINT_MOVIMENTI_KEY)||0);
+  const ultimaCompleta = Number(localStorage.getItem(SYNC_COMPLETA_KEY)||0);
+  // Lettura completa solo la prima volta su un dispositivo e una volta a settimana
+  // (rete di sicurezza per cambiamenti sfuggiti); altrimenti solo i cambiamenti.
+  const serveCompleta = !checkpoint || !state.transazioni.length || Date.now()-ultimaCompleta > GIORNI_TRA_SYNC_COMPLETE*86400000;
+  if (serveCompleta) { movimentiColRef.onSnapshot(processaSnapshotMovimenti, errore); return; }
+  primoSnapshotMovimenti = false;
+  const da = firebase.firestore.Timestamp.fromMillis(checkpoint - MARGINE_CHECKPOINT_MS);
+  movimentiColRef.where("_syncAt", ">", da).onSnapshot(processaDeltaMovimenti, errore);
+  cancellatiColRef.where("_syncAt", ">", da).onSnapshot(processaLapidi, errore);
 }
 
 // ---------- movimenti da confermare (sincronizzazione automatica) ----------
@@ -4383,11 +4483,13 @@ async function sincronizzaPendingMovimenti(){
   const p = leggiPendingMovimenti();
   try {
     for (const t of Object.values(p.set)) {
-      await movimentiColRef.doc(t.id).set(t);
+      await movimentiColRef.doc(t.id).set(conOraServer(t));
       confermaPending(t.id, "set");
     }
     for (const id of Object.keys(p.del)) {
-      await movimentiColRef.doc(id).delete();
+      const batch = db.batch();
+      cancellaMovimentoInBatch(batch, id);
+      await batch.commit();
       confermaPending(id, "del");
     }
   } catch(e){ console.error("Modifiche offline ancora in attesa", e); setCloudStatus("\u26A0\uFE0F offline (modifiche in attesa)"); }
@@ -4538,7 +4640,7 @@ async function migraMovimentiAColezioneSeparata(){
     saveRicorrenti(); // calcolaPuliziaCompleta può aver unificato regole ricorrenti duplicate nel frattempo
     for (let i=0; i<listaPulita.length; i+=450){
       const batch = db.batch();
-      listaPulita.slice(i,i+450).forEach(t => batch.set(movimentiColRef.doc(t.id), t));
+      listaPulita.slice(i,i+450).forEach(t => batch.set(movimentiColRef.doc(t.id), conOraServer(t)));
       await batch.commit();
     }
     localStorage.setItem("bilancio_migrazione_movimenti_v2", "1");
