@@ -4682,6 +4682,19 @@ function elaboraStipendio(it){
   registraAudit("Stipendio registrato da BPER", `${voce}: ${calcolo}`);
   aggiornaInbox(it.id, {stato:"confermato", movimentoId:`auto-${it.id}`});
 }
+// Entrata fissa senza tredicesima (assegno unico): importo reale, la ricorrenza che
+// la generava si chiude da questo mese.
+function elaboraEntrataFissa(it){
+  const voce = it.voce, [anno, mese, giorno] = String(it.data).split("-").map(Number);
+  if (inseritoAMano(voce, true, anno, mese)) return;
+  if (state.transazioni.some(t => t.automatico==="entrata_fissa" && t.voce===voce && t.anno===anno && t.mese===mese)) return;
+  chiudiRicorrenzeDa(voce, true, anno, mese);
+  salvaMovimento({id:`auto-${it.id}`, anno, mese, giorno, categoria:"Entrate", descrizione:`${voce} (accredito reale ${eur(it.importo)})`,
+    importo:Number(it.importo), amex:false, automatico:"entrata_fissa", voce, inboxId:it.id, descrizioneBanca:it.descrizione,
+    createdAt:Date.now(), updatedAt:Date.now()});
+  registraAudit("Entrata registrata da BPER", `${voce}: ${eur(it.importo)}`);
+  aggiornaInbox(it.id, {stato:"confermato", movimentoId:`auto-${it.id}`});
+}
 function elaboraMovimentiAutomatici(){
   if (!movimentiPronti || !cloudReady) return;
   [...inboxItems].filter(it => it.tipo && it.stato==="da_confermare" && !automaticiInCorso.has(it.id))
@@ -4691,6 +4704,7 @@ function elaboraMovimentiAutomatici(){
       try {
         if (it.tipo==="rata_trimestrale") elaboraRataTrimestrale(it);
         else if (it.tipo==="stipendio" && it.voce) elaboraStipendio(it);
+        else if (it.tipo==="entrata_fissa" && it.voce) elaboraEntrataFissa(it);
       } catch(e) { console.error("Inserimento automatico non riuscito", it.id, e); }
     });
 }

@@ -273,6 +273,12 @@ function inboxDaBper(acc, t, imp) {
   const data = mDel ? mDel[3] + "-" + mDel[2] + "-" + mDel[1] : (t.transaction_date || t.value_date || t.booking_date);
   // Stipendi: l'app li registra da soli con la tredicesima spalmata (prima delle
   // parole escluse, che contengono "emolumenti" e "stipendio").
+  // Entrate fisse senza tredicesima (assegno unico): registrate dall'app con l'importo reale.
+  const fissa = entrata && REGOLE_ENTRATA_FISSA.find(r => r.re.test(descr));
+  if (fissa) {
+    if (imp.dal && data < imp.dal) return false;
+    return creaInbox(id, Object.assign({}, base, { data: data, tipo: "entrata_fissa", voce: fissa.voce }));
+  }
   const stipendio = entrata && REGOLE_STIPENDIO.find(r => r.re.test(descr));
   if (stipendio) {
     if (imp.dal && data < imp.dal) return false;
@@ -296,7 +302,11 @@ const REGOLE_STIPENDIO = [
   { re: /noipa|\bmef\b|s\.?i\.?i\.?t\b|tesoreria (provinciale )?(dello )?stato|spesa fissa/i, voce: "Stipendio Chiara" },
   { re: /\bemolumenti\b/i, voce: "Stipendio Cosimo" }
 ];
-const SEMBRA_STIPENDIO = /stipendi|emolument|retribuz|salari|cedolino|competenze/i;
+// Assegno unico dall'INPS (il bonus nido, anch'esso INPS, resta un'entrata normale).
+const REGOLE_ENTRATA_FISSA = [
+  { re: /assegno unico|\ba\.?u\.?u\.?\b/i, voce: "Assegno unico" }
+];
+const SEMBRA_STIPENDIO =/stipendi|emolument|retribuz|salari|cedolino|competenze/i;
 
 // ---------------------------------------------------------------------------
 // Email di avviso AMEX
@@ -385,7 +395,9 @@ function aggiornaSeInAttesa(id, doc) {
   if (g.getResponseCode() !== 200) return;
   const stato = ((JSON.parse(g.getContentText()).fields || {}).stato || {}).stringValue;
   if (stato !== "da_confermare") return;
-  const campi = ["data", "anno", "mese", "giorno", "importo", "descrizione"];
+  // Anche tipo e voce: un movimento arrivato prima di una nuova regola (es. l'assegno
+  // unico di ottobre) diventa automatico alla sincronizzazione successiva.
+  const campi = ["data", "anno", "mese", "giorno", "importo", "descrizione"].concat(["tipo", "voce"].filter(k => doc[k]));
   const v = {};
   campi.forEach(k => v[k] = doc[k]);
   UrlFetchApp.fetch(fsUrl(INBOX + "/" + encodeURIComponent(id)) + "?" + campi.map(k => "updateMask.fieldPaths=" + k).join("&"), {
