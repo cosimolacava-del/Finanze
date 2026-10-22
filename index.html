@@ -29,10 +29,12 @@ h1{font-family:ui-serif,Georgia,serif;font-size:28px;font-weight:700;margin:0;le
 .summary-card{display:flex;flex-direction:column;gap:6px;}
 .summary-label{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;}
 .summary-value{font-family:ui-monospace,Menlo,monospace;font-size:26px;font-weight:700;}
-.two-col{display:grid;grid-template-columns:1.1fr 1.4fr;gap:20px;align-items:start;}
-.three-col{display:grid;grid-template-columns:0.85fr 1fr 1fr;gap:16px;align-items:start;}
-@media (max-width:900px){.three-col{grid-template-columns:1fr 1fr;}}
-@media (max-width:820px){.two-col{grid-template-columns:1fr;} .summary-grid{grid-template-columns:1fr;} .three-col{grid-template-columns:1fr;}}
+/* minmax(0,…): le colonne non si allargano col contenuto, così un pulsante più
+   lungo (es. "Conferma?" al posto della x) non fa slittare tutte le righe. */
+.two-col{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1.4fr);gap:20px;align-items:start;}
+.three-col{display:grid;grid-template-columns:minmax(0,0.85fr) minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start;}
+@media (max-width:900px){.three-col{grid-template-columns:minmax(0,1fr) minmax(0,1fr);}}
+@media (max-width:820px){.two-col{grid-template-columns:minmax(0,1fr);} .summary-grid{grid-template-columns:1fr;} .three-col{grid-template-columns:minmax(0,1fr);}}
 @media (max-width:700px){
   .wrap{padding:18px 12px 64px;}
   .header-row{display:block;}
@@ -1078,6 +1080,23 @@ function render(){
       };
     } catch(e) { daPreservare = null; }
   }
+  // Anche la posizione di scorrimento (pagina e liste scorrevoli, es. Entrate/Uscite)
+  // va mantenuta: altrimenti dopo la "x" di cancellazione la lista torna in cima e
+  // il pulsante "Conferma" non è più sotto il dito.
+  // Le liste si riposizionano solo se si sta guardando lo stesso mese.
+  const stessaScheda = render._ultimaScheda === state.tab;
+  const contesto = state.tab + "|" + state.selYear + "-" + state.selMonth, stessoContesto = render._ultimoContesto === contesto;
+  const scrollPagina = window.scrollY;
+  const listeScorrevoli = () => {
+    const visti = {};
+    return [...content.querySelectorAll(".tx-list, [style*='overflow']")].map(el => {
+      const sel = selettoreElemento(el), n = visti[sel] = (visti[sel] || 0) + 1;
+      return {el, chiave: sel + "#" + n};
+    });
+  };
+  const scrollListe = {};
+  if (stessoContesto && content) listeScorrevoli().forEach(({el, chiave}) => { if (el.scrollTop > 0) scrollListe[chiave] = el.scrollTop; });
+  render._ultimaScheda = state.tab; render._ultimoContesto = contesto;
   renderTabs();
   document.getElementById("subtitle").textContent =
     "Il tuo registro finanziario — " + state.transazioni.length + " movimenti registrati.";
@@ -1100,6 +1119,8 @@ function render(){
       }
     } catch(e) { /* selettore non valido: ignora, non blocca il resto */ }
   }
+  if (stessoContesto) listeScorrevoli().forEach(({el, chiave}) => { if (scrollListe[chiave]) el.scrollTop = scrollListe[chiave]; });
+  if (stessaScheda && window.scrollY !== scrollPagina) window.scrollTo(0, scrollPagina);
 }
 
 function renderTabs(){
