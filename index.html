@@ -1512,7 +1512,8 @@ function percentile(sortedArr, p){
 function generaConsigli(){
   const consigli = [];
   const oggiConsigli = new Date();
-  const nonFuturoConsigli = (m) => m.anno < oggiConsigli.getFullYear() || (m.anno===oggiConsigli.getFullYear() && m.mese <= oggiConsigli.getMonth()+1);
+  // Solo mesi conclusi, come la media in home: il mese in corso è parziale.
+  const nonFuturoConsigli = (m) => m.anno < oggiConsigli.getFullYear() || (m.anno===oggiConsigli.getFullYear() && m.mese < oggiConsigli.getMonth()+1);
   const data = getMonthlySummary().filter(nonFuturoConsigli);
   if (data.length < 2) return consigli;
 
@@ -1538,11 +1539,13 @@ function generaConsigli(){
   const entratePreviste = state.vociEntrata.reduce((s,v)=>s+(budgetAnno["ENT::"+v]||0),0)/12;
   const uscitePreviste = state.categorieBudget.reduce((s,c)=>s+(budgetAnno[c]||0),0)/12;
   const risparmioPrevisto = entratePreviste - uscitePreviste;
-  const risparmioMedioRecente = recenti.reduce((s,m)=>s+m.risparmio,0)/nRecenti;
+  // Stessa media mostrata in home (ultimi 6 mesi conclusi).
+  const mesiMedia = Math.min(6, data.length);
+  const risparmioMedioRecente = paceMedioRisparmioRecente(6);
   if (risparmioPrevisto > 0 && risparmioMedioRecente < risparmioPrevisto * 0.8) {
-    consigli.push({tipo:"warn", testo: `Il risparmio medio degli ultimi ${nRecenti} mesi (${eur(risparmioMedioRecente)}) è sotto l'obiettivo di budget (${eur(risparmioPrevisto)}/mese).`});
+    consigli.push({tipo:"warn", testo: `Il risparmio medio degli ultimi ${mesiMedia} mesi conclusi (${eur(risparmioMedioRecente)}) è sotto l'obiettivo di budget (${eur(risparmioPrevisto)}/mese).`});
   } else if (risparmioPrevisto > 0 && risparmioMedioRecente > risparmioPrevisto * 1.1) {
-    consigli.push({tipo:"good", testo: `Stai risparmiando più del previsto: ${eur(risparmioMedioRecente)}/mese in media contro un obiettivo di ${eur(risparmioPrevisto)}.`});
+    consigli.push({tipo:"good", testo: `Stai risparmiando più del previsto: ${eur(risparmioMedioRecente)}/mese in media negli ultimi ${mesiMedia} mesi conclusi, contro un obiettivo di ${eur(risparmioPrevisto)}.`});
   }
 
   let peggiore = null;
