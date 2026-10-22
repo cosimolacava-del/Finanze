@@ -306,7 +306,7 @@ const REGOLE_STIPENDIO = [
 const REGOLE_ENTRATA_FISSA = [
   { re: /assegno unico|\ba\.?u\.?u\.?\b/i, voce: "Assegno unico" }
 ];
-const SEMBRA_STIPENDIO =/stipendi|emolument|retribuz|salari|cedolino|competenze/i;
+const SEMBRA_STIPENDIO = /stipendi|emolument|retribuz|salari|cedolino|competenze/i;
 
 // ---------------------------------------------------------------------------
 // Email di avviso AMEX
