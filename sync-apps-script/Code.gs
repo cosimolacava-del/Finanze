@@ -130,6 +130,7 @@ function paginaStato(msg) {
 
 // Messaggio per la pagina, dal riepilogo di sincronizzaBper.
 function esitoSincronizzazione(r) {
+  if (r.errore && /\b429\b|RATE_LIMIT/.test(r.errore)) return "BPER ha raggiunto il limite giornaliero di letture (regola PSD2): riprova domani. Saldo e movimenti già scaricati restano nell'app.";
   if (r.errore) return "Sincronizzazione non riuscita: " + r.errore;
   if (r.occupato) return "C'è già una sincronizzazione in corso: riprova tra un minuto.";
   if (!r.attiva) return "La sincronizzazione è disattivata nell'app (Admin → Sincronizzazione automatica banca).";
@@ -418,8 +419,10 @@ function hashBreve(s) {
 // Da eseguire una volta a mano dall'editor: crea gli avvii automatici.
 function installaPianificazione() {
   ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
-  // PSD2: al massimo 4 letture al giorno senza l'utente presente.
-  ScriptApp.newTrigger("sincronizzaBper").timeBased().everyHours(6).create();
+  // PSD2: al massimo 4 letture al giorno senza l'utente presente, e ogni
+  // sincronizzazione ne usa 2 (saldo e movimenti). Mattina, pomeriggio e sera,
+  // niente di notte: resta spazio per il pulsante "Aggiorna saldo".
+  [8, 14, 20].forEach(ora => ScriptApp.newTrigger("sincronizzaBper").timeBased().everyDays(1).atHour(ora).create());
   // Le email AMEX si attivano solo dopo aver verificato parseAvvisoAmex su email vere.
   if (prop("AMEX_ATTIVO", "") === "si") ScriptApp.newTrigger("sincronizzaAmexEmail").timeBased().everyHours(1).create();
   ScriptApp.newTrigger("controllaScadenzaConsenso").timeBased().everyDays(1).atHour(8).create();

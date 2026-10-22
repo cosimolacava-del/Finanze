@@ -4,7 +4,7 @@ Script Google Apps Script che scarica i movimenti e li mette nella sezione
 **"Da confermare"** dell'app (tab Mese). Niente entra nel bilancio finché non lo
 confermi tu.
 
-- **BPER**: movimenti del conto via [Enable Banking](https://enablebanking.com) (open banking PSD2), ogni 6 ore.
+- **BPER**: movimenti del conto via [Enable Banking](https://enablebanking.com) (open banking PSD2), alle 8, alle 14 e alle 20.
 - **AMEX**: email di avviso acquisto lette da Gmail, ogni ora.
 
 L'addebito mensile AMEX sul conto BPER viene escluso, perché gli acquisti arrivano già uno per uno dalle email.

@@ -2137,7 +2137,7 @@ function renderSaldoView(){
   return `
   <div class="card">
     <h3>Saldo Conto — riconciliazione mensile</h3>
-    <p class="sub" style="margin-top:-8px;margin-bottom:6px">Il saldo di fine mese arriva da solo dal conto BPER: è l’ultima lettura dello script nel mese (ogni 6 ore). Il sistema controlla se combacia con i movimenti registrati; il mese in corso resta provvisorio fino alla fine.</p>
+    <p class="sub" style="margin-top:-8px;margin-bottom:6px">Il saldo di fine mese arriva da solo dal conto BPER: è l’ultima lettura dello script nel mese (alle 8, 14 e 20). Il sistema controlla se combacia con i movimenti registrati; il mese in corso resta provvisorio fino alla fine.</p>
     <p class="sub" style="margin-top:0;margin-bottom:18px">* Il risparmio teorico ricostruisce i flussi effettivi del conto: stipendio inserito come netto annuo ÷ 12 ma accreditato in 13 mensilità, Amex nel mese successivo e mutuo nei mesi gennaio, aprile, luglio e ottobre.</p>
     <table>
       <thead><tr><th>Mese</th><th>Saldo reale</th><th>Variazione</th><th>Risparmio teorico</th><th>Differenza</th><th>Esito</th></tr></thead>
@@ -4450,7 +4450,7 @@ function renderImpostazioniSync(){
   const quando = x => x ? new Date(x).toLocaleString("it-IT",{dateStyle:"short",timeStyle:"short"}) : "mai";
   return `<div class="card" style="margin-bottom:20px">
     <h3>Sincronizzazione automatica banca</h3>
-    <p class="sub" style="margin-top:-8px;margin-bottom:14px">Lo script scarica i movimenti <b>contabilizzati</b> del conto BPER ogni 6 ore e li mette in “Da confermare” nella schermata Mese. Niente entra nel bilancio senza la tua conferma.</p>
+    <p class="sub" style="margin-top:-8px;margin-bottom:14px">Lo script scarica i movimenti <b>contabilizzati</b> del conto BPER alle 8, alle 14 e alle 20 e li mette in “Da confermare” nella schermata Mese. Niente entra nel bilancio senza la tua conferma.</p>
     <label style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><input type="checkbox" id="syncAttiva" ${imp.attiva?'checked':''}> Sincronizzazione attiva</label>
     <label class="sub" style="display:block;margin:0 0 10px">Importa i movimenti a partire dal<br><input type="date" id="syncDal" value="${esc(imp.dal)}" style="padding:6px;border:1px solid var(--border-soft);border-radius:6px"></label>
     <label class="sub" style="display:block;margin:0 0 10px">Non importare i movimenti la cui causale contiene (una parola per riga)<br><textarea id="syncEscludi" rows="5" style="width:100%;padding:6px;border:1px solid var(--border-soft);border-radius:6px">${esc(imp.escludi.join("\n"))}</textarea></label>
