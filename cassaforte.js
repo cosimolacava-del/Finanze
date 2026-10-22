@@ -8,7 +8,9 @@
 // La chiave sbloccata vive solo in memoria e sparisce al blocco o alla chiusura.
 // ============================================================
 const Cassaforte = (() => {
-  const COL = "bilancio_familiare_cassaforte", DOC_CHIAVI = "_chiavi";
+  const COL = "bilancio_familiare_cassaforte", DOC_CHIAVI = "_chiavi", COL_ALLEGATI = "bilancio_familiare_cassaforte_allegati";
+  const MAX_ALLEGATO = 10 * 1024 * 1024, PARTE_ALLEGATO = 512 * 1024;
+  const TIPI_ALLEGATO = /^(application\/pdf|image\/(jpeg|png|webp|heic|heif|gif))$/;
   const ITER_PASSWORD = 600000, ITER_RECUPERO = 100000, MIN_PASSWORD = 12;
   const BLOCCO_INATTIVITA = 5 * 60 * 1000, BLOCCO_NASCOSTA = 60 * 1000, PULIZIA_APPUNTI = 30 * 1000;
   const TIPI = {
@@ -167,6 +169,52 @@ const Cassaforte = (() => {
 
   // ---------- Firestore ----------
   const col = () => db.collection(COL);
+
+  // ---------- allegati ----------
+  // Ogni file è cifrato a pezzi da 512 KB, un documento per pezzo, in una
+  // collezione a parte: così non si scaricano finché non li apri. L'id del pezzo
+  // ("<allegato>_<n>") entra nei dati autenticati, e il numero di pezzi sta
+  // nella voce cifrata: pezzi scambiati o mancanti vengono scoperti.
+  const colAllegati = () => db.collection(COL_ALLEGATI);
+  const dimensioneLeggibile = n => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1).replace(".0", "").replace(".", ",")} MB`;
+  async function caricaAllegato(file, avanzamento){
+    if (!TIPI_ALLEGATO.test(file.type)) throw new Error(`“${file.name}”: si possono allegare solo PDF e immagini.`);
+    if (file.size > MAX_ALLEGATO) throw new Error(`“${file.name}” supera ${dimensioneLeggibile(MAX_ALLEGATO)}.`);
+    const id = crypto.randomUUID(), dati = new Uint8Array(await file.arrayBuffer());
+    const parti = Math.max(1, Math.ceil(dati.length / PARTE_ALLEGATO));
+    for (let i = 0; i < parti; i++) {
+      const docId = `${id}_${i}`, iv = casuali(12);
+      const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: enc.encode("allegato:" + docId) }, chiave, dati.subarray(i * PARTE_ALLEGATO, (i + 1) * PARTE_ALLEGATO));
+      await colAllegati().doc(docId).set({ v: 1, iv: b64(iv), ct: b64(ct), aggiornato: Date.now() });
+      avanzamento && avanzamento(i + 1, parti);
+    }
+    return { id, nome: file.name, tipo: file.type, dimensione: dati.length, parti };
+  }
+  async function leggiAllegato(a){
+    const pezzi = [];
+    for (let i = 0; i < a.parti; i++) {
+      const docId = `${a.id}_${i}`, d = await colAllegati().doc(docId).get();
+      if (!d.exists) throw new Error(`Allegato “${a.nome}” incompleto.`);
+      const { iv, ct } = d.data();
+      try { pezzi.push(new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: daB64(iv), additionalData: enc.encode("allegato:" + docId) }, chiave, daB64(ct)))); }
+      catch (err) { throw new Error(`Allegato “${a.nome}” illeggibile.`); }
+    }
+    return new Blob(pezzi, { type: a.tipo });
+  }
+  function eliminaAllegati(elenco){
+    return Promise.all((elenco || []).flatMap(a => Array.from({ length: a.parti }, (_, i) => colAllegati().doc(`${a.id}_${i}`).delete())));
+  }
+  // La finestra si apre subito, al clic: aprirla dopo l'attesa la farebbe bloccare dal browser.
+  async function apriAllegato(a){
+    const finestra = window.open("", "_blank");
+    try {
+      const url = URL.createObjectURL(await leggiAllegato(a));
+      if (finestra) finestra.location.href = url;
+      else { const link = document.createElement("a"); link.href = url; link.download = a.nome; document.body.appendChild(link); link.click(); link.remove(); }
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err) { if (finestra) finestra.close(); throw err; }
+  }
+
   function avvia(){
     if (stopChiavi || !cloudReady || !db) return;
     stopChiavi = col().doc(DOC_CHIAVI).onSnapshot(d => {
@@ -219,6 +267,8 @@ const Cassaforte = (() => {
     throw new Error("Scrivi la tua password attuale per confermare.");
   }
   function blocca(){
+    // Allegati caricati in una modifica mai salvata: non servono più.
+    if (vista.nuoviAllegati && vista.nuoviAllegati.length) eliminaAllegati(vista.nuoviAllegati).catch(() => {});
     chiave = null; chiaveModifiche = null;
     if (stopVoci) { stopVoci(); stopVoci = null; }
     voci.clear();
@@ -342,7 +392,7 @@ const Cassaforte = (() => {
   function renderLista(){
     const q = vista.cerca.trim().toLowerCase();
     const elenco = [...voci.values()]
-      .filter(v => !q || [v.titolo, v.utente, v.url, v.note, TIPI[v.tipo]?.nome].some(x => String(x || "").toLowerCase().includes(q)))
+      .filter(v => !q || [v.titolo, v.utente, v.url, v.note, TIPI[v.tipo]?.nome, ...(v.allegati || []).map(a => a.nome)].some(x => String(x || "").toLowerCase().includes(q)))
       .sort((a, b) => String(a.titolo || "").localeCompare(String(b.titolo || ""), "it"));
     const righe = elenco.map(v => {
       const t = TIPI[v.tipo] || TIPI.nota;
@@ -359,6 +409,8 @@ const Cassaforte = (() => {
         <div class="cf-voce-testa"><div><b>${t.icona} ${e(v.titolo)}</b> <span class="sub">${e(t.nome)}</span> ${badgeScadenza(v)}</div>
           ${v.illeggibile ? "" : pulsante("modifica", "&#9998; Modifica", `data-id="${e(v.id)}"`)}</div>
         ${campi}
+        ${(v.allegati || []).length ? `<div class="cf-riga"><span class="cf-etichetta">&#128206; Allegati</span><span style="display:flex;gap:6px;flex-wrap:wrap;flex:1 1 140px;min-width:0">
+          ${v.allegati.map(a => pulsante("apriAllegato", `${e(a.nome)} <span class="sub">${dimensioneLeggibile(a.dimensione)}</span>`, `data-id="${e(v.id)}" data-allegato="${e(a.id)}" style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"`)).join("")}</span></div>` : ""}
         ${v.note ? `<div class="cf-note">${e(v.note)}</div>` : ""}
       </div>`;
     }).join("");
@@ -387,6 +439,13 @@ const Cassaforte = (() => {
         <label class="cf-campo"><span>Titolo</span><input type="text" data-cf-campo="titolo" value="${e(b.titolo)}" autocomplete="off" placeholder="es. Home banking BPER"></label>
         ${t.campi.map(campo).join("")}
       </div>
+      <h4 style="margin:6px 0">&#128206; Allegati</h4>
+      ${(b.allegati || []).map(a => `<div class="cf-riga"><span class="cf-valore" style="font-family:inherit">${e(a.nome)} <span class="sub">${dimensioneLeggibile(a.dimensione)}</span></span>
+        ${pulsante("apriAllegato", "Apri", `data-allegato="${e(a.id)}"`)}${pulsante("rimuoviAllegato", "Rimuovi", `data-allegato="${e(a.id)}"`)}</div>`).join("")}
+      <label class="range-btn" style="display:inline-block;margin:6px 0 12px;cursor:pointer">+ Aggiungi PDF o foto
+        <input type="file" data-cf-file accept="application/pdf,image/*" multiple style="display:none" ${vista.attesa ? "disabled" : ""}></label>
+      <span class="sub">fino a ${dimensioneLeggibile(MAX_ALLEGATO)} ciascuno, cifrati come il resto</span>
+      <p class="sub" id="cfAvanzamento" style="margin:4px 0"></p>
       ${avviso()}
       <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between">
         <div style="display:flex;gap:8px"><button class="add-btn" data-cf="salva" ${vista.attesa ? "disabled" : ""}>Salva</button>${pulsante("annulla", "Annulla")}</div>
@@ -513,7 +572,40 @@ const Cassaforte = (() => {
     if (!chiave) return;
     const id = el && el.dataset.id, campo = el && el.dataset.campo;
     if (nome === "blocca") return blocca();
-    if (nome === "lista" || nome === "annulla") { const cerca = vista.cerca; vista = vistaIniziale(); vista.cerca = cerca; return render(); }
+    if (nome === "lista" || nome === "annulla") {
+      if (vista.nuoviAllegati && vista.nuoviAllegati.length) eliminaAllegati(vista.nuoviAllegati).catch(() => {});
+      const cerca = vista.cerca; vista = vistaIniziale(); vista.cerca = cerca; return render();
+    }
+    if (nome === "apriAllegato") {
+      const elenco = id ? (voci.get(id) || {}).allegati : (vista.bozza || {}).allegati;
+      const a = (elenco || []).find(x => x.id === el.dataset.allegato);
+      if (!a) return;
+      return apriAllegato(a).catch(err => { vista.errore = err.message; render(); });
+    }
+    if (nome === "caricaAllegati") {
+      const file = [...(el.files || [])];
+      if (!file.length || !vista.bozza) return;
+      return conAttesa(async () => {
+        for (const [n, f] of file.entries()) {
+          const a = await caricaAllegato(f, (fatti, totale) => {
+            const riga = document.getElementById("cfAvanzamento");
+            if (riga) riga.textContent = `Cifratura e caricamento di “${f.name}” (${n + 1}/${file.length}): ${Math.round(fatti / totale * 100)}%`;
+          });
+          vista.bozza.allegati = (vista.bozza.allegati || []).concat(a);
+          (vista.nuoviAllegati = vista.nuoviAllegati || []).push(a);
+        }
+        vista.messaggio = file.length === 1 ? "Allegato caricato: salva la voce per tenerlo." : "Allegati caricati: salva la voce per tenerli.";
+      });
+    }
+    if (nome === "rimuoviAllegato") {
+      const b = vista.bozza, a = (b.allegati || []).find(x => x.id === el.dataset.allegato);
+      if (!a) return;
+      b.allegati = b.allegati.filter(x => x !== a);
+      // Gli allegati già salvati si cancellano davvero solo al salvataggio della voce.
+      if ((vista.nuoviAllegati || []).includes(a)) { vista.nuoviAllegati = vista.nuoviAllegati.filter(x => x !== a); eliminaAllegati([a]).catch(() => {}); }
+      else (vista.allegatiRimossi = vista.allegatiRimossi || []).push(a);
+      return render();
+    }
     if (nome === "impostazioni") { vista.modo = "impostazioni"; vista.errore = vista.messaggio = ""; return render(); }
     if (nome === "rivela") { const k = id + ":" + campo; vista.rivela.has(k) ? vista.rivela.delete(k) : vista.rivela.add(k); return render(); }
     if (nome === "copia") return copia((voci.get(id) || {})[campo]);
@@ -528,8 +620,10 @@ const Cassaforte = (() => {
         const vid = b.id || crypto.randomUUID();
         const dati = { tipo: b.tipo, titolo: b.titolo.trim(), creato: b.creato || Date.now(), modificato: Date.now() };
         (TIPI[b.tipo] || TIPI.nota).campi.forEach(c => { if (b[c]) dati[c] = String(b[c]); });
+        if (b.allegati && b.allegati.length) dati.allegati = b.allegati;
         await col().doc(vid).set(await cifra(dati, vid));
         voci.set(vid, { id: vid, ...dati });
+        await eliminaAllegati(vista.allegatiRimossi).catch(() => {});
         const cerca = vista.cerca; vista = vistaIniziale(); vista.cerca = cerca; vista.messaggio = "Voce salvata.";
       });
     }
@@ -539,6 +633,7 @@ const Cassaforte = (() => {
       return conAttesa(async () => {
         await col().doc(b.id).delete();
         voci.delete(b.id);
+        await eliminaAllegati((b.allegati || []).concat(vista.allegatiRimossi || [])).catch(() => {});
         vista = vistaIniziale(); vista.messaggio = "Voce eliminata.";
       });
     }
@@ -604,8 +699,9 @@ const Cassaforte = (() => {
   }
 
   async function esporta(){
-    const snap = await col().get();
-    const dati = { formato: "cassaforte-bilancio", versione: 1, esportato: new Date().toISOString(), documenti: snap.docs.map(d => ({ id: d.id, ...d.data() })) };
+    const [snap, snapAllegati] = await Promise.all([col().get(), colAllegati().get()]);
+    const dati = { formato: "cassaforte-bilancio", versione: 1, esportato: new Date().toISOString(),
+      documenti: snap.docs.map(d => ({ id: d.id, ...d.data() })), allegati: snapAllegati.docs.map(d => ({ id: d.id, ...d.data() })) };
     const url = URL.createObjectURL(new Blob([JSON.stringify(dati, null, 1)], { type: "application/json" }));
     const a = document.createElement("a");
     a.href = url; a.download = `cassaforte-cifrata-${new Date().toISOString().slice(0, 10)}.json`;
@@ -636,6 +732,7 @@ const Cassaforte = (() => {
     }
   };
   document.addEventListener("input", aggiornaCampo);
+  document.addEventListener("change", ev => { if (ev.target.matches && ev.target.matches("[data-cf-file]")) azione("caricaAllegati", ev.target); });
 
   return { render: renderVista, blocca };
 })();
