@@ -776,7 +776,7 @@ function riepilogoCassaMese(anno, mese){
   let uscite = 0;
   state.transazioni.filter(t=>t.categoria!=="Entrate").forEach(t => {
     if (eTrimestrale(t)) return;
-    const addebito = t.amex ? (t.giorno ? (Number(t.giorno)>=15 ? shiftMonth(t.anno,t.mese,1) : {anno:t.anno,mese:t.mese}) : shiftMonth(t.anno,t.mese,1)) : {anno:t.anno,mese:t.mese};
+    const addebito = t.amex ? meseCassaAmex(t) : {anno:t.anno,mese:t.mese};
     if (addebito.anno===anno && addebito.mese===mese) uscite += t.importo;
   });
   configurazioni.forEach(cfg => { uscite += addebitoTrimestraleMese(cfg, anno, mese); });
@@ -789,8 +789,12 @@ function riepilogoCassaMese(anno, mese){
 //  - rate trimestrali addebitate in anticipo per i mesi successivi (si riaggiungono);
 //  - nel mese di addebito, la quota del mese se l'addebito non è ancora uscito (si toglie).
 function chiaveMese(anno, mese){ return anno*12+mese; }
+// Ciclo AMEX: l'estratto conto chiude l'8 e l'addebito su BPER arriva il 15 dello
+// stesso mese. Gli acquisti dal 9 del mese prima all'8 escono quindi nel mese
+// dell'addebito; senza giorno si assume il mese successivo.
+const GIORNO_CHIUSURA_AMEX = 8;
 function meseCassaAmex(t){
-  return t.giorno ? (Number(t.giorno)>=15 ? shiftMonth(t.anno,t.mese,1) : {anno:t.anno,mese:t.mese}) : shiftMonth(t.anno,t.mese,1);
+  return t.giorno ? (Number(t.giorno)>GIORNO_CHIUSURA_AMEX ? shiftMonth(t.anno,t.mese,1) : {anno:t.anno,mese:t.mese}) : shiftMonth(t.anno,t.mese,1);
 }
 function disponibileOggi(){
   const s = inboxStato || {};
@@ -1256,7 +1260,7 @@ function renderMeseView(){
     <select class="big-select" id="selYear">${years.map(y=>`<option value="${y}" ${state.selYear===y?'selected':''}>${y}</option>`).join('')}</select>
     <button class="nav-btn" id="nextMonth">&#8250;</button>
   </div>
-  ${renderInbox()}
+  ${renderControlliAmex()}${renderInbox()}
   <div class="dashboard-top">
     <div class="card balance-hero"><div class="summary-label">Disponibile oggi</div><div class="balance-main">${disp?eur(disp.valore):'—'}</div>${disp?`
       <div class="balance-meta" style="margin-top:4px">Saldo BPER <b style="color:#fff">${eur(disp.saldo)}</b> · ${escapeHtml(quandoSaldo)}</div>
@@ -1946,7 +1950,7 @@ function operazioniCassaAttese(anno, mese){
     out.push({segno:1,importo,descrizione:t.descrizione,giorno:t.giorno||null,tipo:voce?"stipendio":"entrata",id:t.id});
   });
   state.transazioni.filter(t=>t.categoria!=="Entrate"&&!eTrimestrale(t)).forEach(t=>{
-    const cash=t.amex?(t.giorno?(Number(t.giorno)>=15?shiftMonth(t.anno,t.mese,1):{anno:t.anno,mese:t.mese}):shiftMonth(t.anno,t.mese,1)):{anno:t.anno,mese:t.mese};
+    const cash=t.amex?meseCassaAmex(t):{anno:t.anno,mese:t.mese};
     if(cash.anno===anno&&cash.mese===mese)out.push({segno:-1,importo:t.importo,descrizione:t.descrizione,giorno:t.giorno||null,tipo:t.amex?"amex":"uscita",id:t.id});
   });
   trimestrali.forEach(cfg=>{
@@ -4473,7 +4477,7 @@ function inboxVisibili(){
   const imp = impostazioniSync();
   // Mutuo e stipendi riconosciuti (con "tipo") si vedono qui solo se l'inserimento
   // automatico si è fermato (es. voce già inserita a mano): mai nascosti dalle esclusioni.
-  return inboxItems.filter(it => it.tipo || ((!imp.dal || String(it.data) >= imp.dal) &&
+  return inboxItems.filter(it => it.tipo!=="addebito_amex").filter(it => it.tipo || ((!imp.dal || String(it.data) >= imp.dal) &&
     !imp.escludi.some(p => p && String(it.descrizione||"").toLowerCase().includes(String(p).toLowerCase()))));
 }
 function renderImpostazioniSync(){
@@ -4505,6 +4509,43 @@ function bindImpostazioniSync(){
       alert("Impostazioni salvate.");
     } catch(e) { alert("Non sono riuscito a salvare le impostazioni: " + e.message); }
   };
+}
+// ---------- controllo addebito AMEX ----------
+// L'addebito mensile AMEX su BPER non entra nel bilancio: serve a verificare di
+// aver registrato tutte le spese AMEX del ciclo che paga (stessa regola di cassa
+// dell'app, meseCassaAmex: acquisti dal 9 del mese prima all'8 del mese dell'addebito).
+function speseCicloAmex(anno, mese){
+  return state.transazioni.filter(t => t.amex && t.categoria!=="Entrate")
+    .filter(t => { const c = meseCassaAmex(t); return c.anno===anno && c.mese===mese; })
+    .sort((a,b) => (a.anno*12+a.mese)-(b.anno*12+b.mese) || (a.giorno||0)-(b.giorno||0));
+}
+function renderControlliAmex(){
+  const da = inboxItems.filter(it => it.tipo==="addebito_amex" && it.stato==="da_confermare")
+    .sort((a,b) => String(a.data).localeCompare(String(b.data)));
+  if (!da.length) return '';
+  const esc = s => escapeHtml(String(s??"")).replace(/"/g,"&quot;");
+  return da.map(it => {
+    const d = new Date(it.data), anno = d.getFullYear(), mese = d.getMonth()+1, prima = shiftMonth(anno, mese, -1);
+    const spese = speseCicloAmex(anno, mese), registrato = arrotonda(spese.reduce((s,t)=>s+Number(t.importo||0),0));
+    const diff = arrotonda(Number(it.importo) - registrato);
+    const esito = Math.abs(diff) <= 1
+      ? `<span style="color:${GREEN};font-weight:700">✓ Tornano: hai registrato tutte le spese del ciclo.</span>`
+      : diff > 0
+        ? `<span style="color:${RUST};font-weight:700">⚠️ Mancano ${eur(diff)}: qualche spesa AMEX non è registrata (o ci sono commissioni/quote).</span>`
+        : `<span style="color:${GOLD};font-weight:700">⚠️ Hai registrato ${eur(-diff)} in più dell'addebito: forse una spesa è nel ciclo sbagliato o c'è un rimborso.</span>`;
+    const elenco = spese.map(t => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${t.giorno?`${t.giorno}/${t.mese}`:`${MESI[t.mese-1].slice(0,3)}`} · ${esc(t.descrizione)}</span><span style="font-family:ui-monospace,Menlo,monospace">${eur(t.importo)}</span></div>`).join('');
+    return `<div class="card" style="margin-bottom:16px">
+      <h3 style="margin-bottom:4px">\u{1F4B3} Controllo addebito AMEX del ${d.toLocaleDateString("it-IT")}</h3>
+      <div class="sub" style="margin:0 0 8px">Ciclo: acquisti dal ${GIORNO_CHIUSURA_AMEX+1} ${MESI[prima.mese-1].toLowerCase()} all'${GIORNO_CHIUSURA_AMEX} ${MESI[mese-1].toLowerCase()} (estratto chiuso l'${GIORNO_CHIUSURA_AMEX}, addebito verso il 15). L'addebito non entra nel bilancio, serve solo al controllo.</div>
+      <div style="display:grid;grid-template-columns:auto auto;gap:2px 16px;max-width:360px;font-size:13px">
+        <span>Addebitato su BPER</span><b style="font-family:ui-monospace,Menlo,monospace;text-align:right">${eur(it.importo)}</b>
+        <span>Spese AMEX registrate (${spese.length})</span><b style="font-family:ui-monospace,Menlo,monospace;text-align:right">${eur(registrato)}</b>
+      </div>
+      <div style="margin:8px 0;font-size:13px">${esito}</div>
+      ${spese.length ? `<details style="font-size:12px;margin-bottom:8px"><summary style="cursor:pointer">Vedi le spese del ciclo</summary><div style="display:grid;gap:2px;margin-top:6px">${elenco}</div></details>` : ''}
+      <button data-amex-ok="${esc(it.id)}" class="add-btn" style="padding:6px 12px">Ho controllato</button>
+    </div>`;
+  }).join('');
 }
 function renderInbox(){
   const scad = inboxStato && inboxStato.consensoBperFino ? new Date(inboxStato.consensoBperFino) : null;
@@ -4654,6 +4695,7 @@ function elaboraMovimentiAutomatici(){
     });
 }
 function bindInbox(){
+  document.querySelectorAll("[data-amex-ok]").forEach(b => b.onclick = () => aggiornaInbox(b.dataset.amexOk, {stato:"confermato"}));
   document.querySelectorAll("[data-inbox-ok]").forEach(b => b.onclick = () => confermaInbox(b.dataset.inboxOk));
   document.querySelectorAll("[data-inbox-no]").forEach(b => b.onclick = () => aggiornaInbox(b.dataset.inboxNo, {stato:"ignorato"}));
 }

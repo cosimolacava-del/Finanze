@@ -260,9 +260,13 @@ function inboxDaBper(acc, t, imp) {
     ricordaAddebito("ULTIMO_ADDEBITO_MUTUO", t.booking_date);
     return creaInbox(id, Object.assign({}, base, { data: t.booking_date, tipo: "rata_trimestrale" }));
   }
-  // L'addebito mensile AMEX: le spese le registri tu una per una con la spunta AMEX;
-  // come fa l'app nella riconciliazione, lo escludiamo per non contarlo due volte.
-  if (/\b(american express|americanexpress|amex)\b/i.test(descr)) { ricordaAddebito("ULTIMO_ADDEBITO_AMEX", t.booking_date); return false; }
+  // L'addebito mensile AMEX non entra nel bilancio (le spese le registri tu una per
+  // una con la spunta AMEX): arriva all'app solo per il controllo, che lo confronta
+  // con le spese AMEX registrate per quel ciclo.
+  if (!entrata && /\b(american express|americanexpress|amex)\b/i.test(descr)) {
+    ricordaAddebito("ULTIMO_ADDEBITO_AMEX", t.booking_date);
+    return creaInbox(id, Object.assign({}, base, { data: t.booking_date, tipo: "addebito_amex" }));
+  }
   // Per il bilancio conta il giorno dell'acquisto, non quello di contabilizzazione:
   // le spese con carta BPER lo riportano nella causale ("... del 16.10.2026").
   const mDel = descr.match(/\bdel (\d{2})\.(\d{2})\.(\d{4})\b/);
