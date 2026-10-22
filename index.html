@@ -4590,8 +4590,12 @@ function elaboraStipendio(it){
   let ordinario = accredito, tredicesimaStornata = 0;
   if (mese===MESE_TREDICESIMA) {
     // Accredito unico con stipendio + tredicesima: si storna la parte di tredicesima.
+    // Soglia bassa (+10%): il primo anno di un lavoro la tredicesima è solo per i mesi
+    // lavorati (es. Chiara 2026: 4 mesi, tredicesima = 4/12 di stipendio, accredito
+    // ≈ 1,33 volte lo stipendio). Il × 13/12 mensile è comunque giusto: la tredicesima
+    // matura 1/12 per ogni mese lavorato.
     const riferimento = mensilitaDiRiferimento(voce, anno, mese);
-    if (riferimento && accredito > 1.5*riferimento) { ordinario = riferimento; tredicesimaStornata = arrotonda(accredito - riferimento); }
+    if (riferimento && accredito > 1.1*riferimento) { ordinario = riferimento; tredicesimaStornata = arrotonda(accredito - riferimento); }
   }
   const importo = arrotonda(ordinario*13/12);
   // Tra parentesi il calcolo: accredito reale e importo con la tredicesima spalmata.
