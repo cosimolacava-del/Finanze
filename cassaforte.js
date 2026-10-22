@@ -30,6 +30,10 @@ const Cassaforte = (() => {
   let chiavi;              // undefined = in caricamento, null = cassaforte da creare
   let erroreCloud = "";
   let chiave = null;       // CryptoKey non estraibile, solo in memoria
+  let chiaveModifiche = null, scadenzaModifiche = 0;
+  const FINESTRA_MODIFICHE = 3 * 60 * 1000;
+  const haPasskey = () => (chiavi?.slots || []).some(s => s.tipo === "passkey");
+  const haPassword = () => (chiavi?.slots || []).some(s => s.tipo === "password");
   const voci = new Map();  // id -> voce decifrata (solo mentre è sbloccata)
   let stopChiavi = null, stopVoci = null, codaDecifra = Promise.resolve();
   let vista = vistaIniziale();
@@ -201,12 +205,21 @@ const Cassaforte = (() => {
     });
   }
 
-  function sblocca(k){
-    chiave = k; vista = vistaIniziale(); ultimoUso = Date.now();
+  // Per qualche minuto dopo lo sblocco le modifiche agli accessi (nuova persona,
+  // passkey, chiave di recupero) non chiedono di riconfermare l'identità.
+  async function sblocca(kEstraibile){
+    chiave = await nonEstraibile(kEstraibile); vista = vistaIniziale(); ultimoUso = Date.now();
+    chiaveModifiche = kEstraibile; scadenzaModifiche = Date.now() + FINESTRA_MODIFICHE;
     ascoltaVoci();
   }
+  async function confermaIdentita(password){
+    if (chiaveModifiche && Date.now() < scadenzaModifiche) return chiaveModifiche;
+    if (password) return (await apriConPassword(password, true)).chiave;
+    if (haPasskey()) return (await apriConPasskey(true)).chiave;
+    throw new Error("Scrivi la tua password attuale per confermare.");
+  }
   function blocca(){
-    chiave = null;
+    chiave = null; chiaveModifiche = null;
     if (stopVoci) { stopVoci(); stopVoci = null; }
     voci.clear();
     vista = vistaIniziale();
@@ -252,22 +265,29 @@ const Cassaforte = (() => {
 
   function renderCreazione(){
     return `<div class="card cf">${intestazione()}
-      <p class="sub">Qui puoi tenere password, codici e dati importanti della famiglia. Tutto viene cifrato su questo dispositivo prima di essere salvato: senza la password nessuno può leggerlo, neanche Google.</p>
-      <p class="sub"><b>Scegli una password lunga che ricordi bene</b> (almeno ${MIN_PASSWORD} caratteri; va bene una frase di 4-5 parole). Non salvarla nel browser e non usarla altrove. Se la dimentichi, i dati si recuperano con la chiave di recupero che ti mostro subito dopo, oppure con una passkey del telefono se poi ne aggiungi una in Impostazioni.</p>
+      <p class="sub">Qui puoi tenere password, codici e dati importanti della famiglia. Tutto viene cifrato su questo dispositivo prima di essere salvato: senza il tuo accesso nessuno può leggerlo, neanche Google.</p>
       <div class="cf-form">
         <label class="cf-campo"><span>Il tuo nome</span><input type="text" data-cf-input="nome" value="Cosimo" autocomplete="off"></label>
+      </div>
+      ${passkeyDisponibili() ? `
+      <p class="sub"><b>Consigliato: con impronta o Face ID.</b> Il telefono crea una passkey, salvata nel gestore delle password di Google o iCloud. Sul PC la usi inquadrando il QR code col telefono. Niente password da ricordare.</p>
+      ${avviso()}
+      <button class="add-btn" data-cf="creaPasskey" ${vista.attesa ? "disabled" : ""}>${vista.attesa ? "Creazione…" : "&#128241; Crea con impronta / Face ID"}</button>
+      <h4 style="margin:22px 0 6px">Oppure con una password</h4>` : avviso()}
+      <p class="sub">Almeno ${MIN_PASSWORD} caratteri; va bene una frase di 4-5 parole. Non salvarla nel browser e non usarla altrove.</p>
+      <div class="cf-form">
         ${campoPassword("password", "Password della cassaforte", "new-password")}
         ${campoPassword("conferma", "Ripeti la password", "new-password")}
       </div>
-      ${avviso()}
-      <button class="add-btn" data-cf="crea" ${vista.attesa ? "disabled" : ""}>${vista.attesa ? "Creazione…" : "Crea la cassaforte"}</button>
+      <button class="${passkeyDisponibili() ? "range-btn" : "add-btn"}" data-cf="crea" ${vista.attesa ? "disabled" : ""}>Crea con password</button>
+      <p class="sub" style="margin-top:14px">In entrambi i casi ricevi subito una chiave di recupero da scrivere su carta: serve se perdi il telefono o dimentichi la password.</p>
     </div>`;
   }
 
   function renderChiaveRecupero(){
     return `<div class="card cf">${intestazione()}
       <h4 style="margin:6px 0">Chiave di recupero</h4>
-      <p class="sub">Scrivila su carta e conservala in un posto sicuro in casa. Serve se dimentichi la password: senza password e senza questa chiave i dati sono persi per sempre. Non verrà più mostrata.</p>
+      <p class="sub">Scrivila su carta e conservala in un posto sicuro in casa. Serve se perdi il telefono o dimentichi la password: senza un accesso e senza questa chiave i dati sono persi per sempre. Non verrà più mostrata.</p>
       <div class="cf-recupero">${e(vista.chiaveRecupero)}</div>
       <label style="display:flex;gap:8px;align-items:center;margin:12px 0"><input type="checkbox" data-cf-input="presaNota"> L'ho scritta e conservata</label>
       ${avviso()}
@@ -277,27 +297,36 @@ const Cassaforte = (() => {
 
   function renderSblocco(){
     const recupero = vista.modo === "recupero";
-    const nomi = (chiavi.slots || []).filter(s => s.tipo === "password").map(s => s.nome);
-    const conPasskey = passkeyDisponibili() && (chiavi.slots || []).some(s => s.tipo === "passkey");
-    return `<div class="card cf">${intestazione()}
-      ${recupero ? `
-        <p class="sub">Scegli una nuova password, poi conferma con la chiave di recupero${conPasskey ? " oppure con la passkey del telefono" : ""}.</p>
+    const nomi = [...new Set((chiavi.slots || []).filter(s => s.tipo !== "recupero").map(s => s.nome))];
+    const conPasskey = passkeyDisponibili() && haPasskey();
+    const attesa = vista.attesa ? "disabled" : "";
+    if (recupero) return `<div class="card cf">${intestazione()}
+        <p class="sub">Per riavere l'accesso: scrivi chi sei e la chiave di recupero, poi crea una nuova passkey${passkeyDisponibili() ? " oppure una nuova password" : ""}.</p>
         <div class="cf-form">
-          <label class="cf-campo"><span>Password di</span><select data-cf-input="nome">${nomi.map(n => `<option>${e(n)}</option>`).join("")}</select></label>
-          ${campoPassword("password", "Nuova password", "new-password")}
-          ${campoPassword("conferma", "Ripeti la nuova password", "new-password")}
+          <label class="cf-campo"><span>Il tuo nome</span><input type="text" data-cf-input="nome" list="cfNomiRec" value="${e(nomi[0] || "")}" autocomplete="off"><datalist id="cfNomiRec">${nomi.map(n => `<option value="${e(n)}">`).join("")}</datalist></label>
           <label class="cf-campo"><span>Chiave di recupero</span><input type="text" data-cf-input="recupero" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
         </div>
         ${avviso()}
-        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="add-btn" data-cf="recupera" ${vista.attesa ? "disabled" : ""}>${vista.attesa ? "Verifica…" : "Conferma con la chiave di recupero"}</button>
-        ${conPasskey ? `<button class="add-btn" data-cf="recuperaPasskey" ${vista.attesa ? "disabled" : ""}>&#128241; Conferma con la passkey</button>` : ""}
-        ${pulsante("annullaRecupero", "Annulla")}</div>` : `
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${passkeyDisponibili() ? `<button class="add-btn" data-cf="recuperaNuovaPasskey" ${attesa}>&#128241; Recupera e crea una nuova passkey</button>` : ""}
+          ${pulsante("annullaRecupero", "Annulla")}</div>
+        <h4 style="margin:22px 0 6px">Oppure imposta una nuova password</h4>
+        <div class="cf-form">
+          ${campoPassword("password", "Nuova password", "new-password")}
+          ${campoPassword("conferma", "Ripeti la nuova password", "new-password")}
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${pulsante("recupera", "Recupera con la chiave e imposta la password", attesa)}
+          ${conPasskey && haPassword() ? pulsante("recuperaPasskey", "&#128241; Conferma con la passkey invece della chiave", attesa) : ""}</div>
+      </div>`;
+    return `<div class="card cf">${intestazione()}
         <p class="sub">La cassaforte è bloccata. Si blocca da sola dopo 5 minuti di inattività.</p>
-        <div class="cf-form">${campoPassword("password", "Password", "current-password")}</div>
         ${avviso()}
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="add-btn" data-cf="sblocca" ${vista.attesa ? "disabled" : ""}>${vista.attesa ? "Sblocco…" : "Sblocca"}</button>
-        ${conPasskey ? pulsante("sbloccaPasskey", "&#128241; Usa la passkey", vista.attesa ? "disabled" : "") : ""}
-        <a href="#" data-cf="mostraRecupero" class="sub">Ho dimenticato la password</a></div>`}
+        ${conPasskey ? `<button class="add-btn" data-cf="sbloccaPasskey" ${attesa} style="margin-bottom:12px">${vista.attesa ? "Sblocco…" : "&#128241; Apri con impronta / Face ID"}</button>` : ""}
+        ${haPassword() ? `<div class="cf-form">${campoPassword("password", conPasskey ? "Oppure con la password" : "Password", "current-password")}</div>
+        <button class="${conPasskey ? "range-btn" : "add-btn"}" data-cf="sblocca" ${attesa}>${vista.attesa && !conPasskey ? "Sblocco…" : "Sblocca con password"}</button>` : ""}
+        ${!conPasskey && !haPassword() ? `<p class="cf-errore">Questo browser non supporta le passkey: usa un altro dispositivo o la chiave di recupero.</p>` : ""}
+        <p style="margin:14px 0 0"><a href="#" data-cf="mostraRecupero" class="sub">Non riesco ad accedere</a></p>
     </div>`;
   }
 
@@ -368,34 +397,42 @@ const Cassaforte = (() => {
 
   function renderImpostazioni(){
     const slots = chiavi.slots || [];
-    const persone = slots.filter(s => s.tipo === "password");
+    const accessi = slots.filter(s => s.tipo !== "recupero");
+    const nomi = [...new Set(accessi.map(s => s.nome))];
     const descrizione = s => s.tipo === "recupero" ? "Chiave di recupero" : (s.tipo === "passkey" ? "Passkey di " : "Password di ") + e(s.nome);
     const elenco = slots.map(s => `<div class="cf-riga"><span class="cf-etichetta">${descrizione(s)}</span>
       <span class="sub">creata il ${new Date(s.creato).toLocaleDateString("it-IT")}</span>
-      ${s.tipo === "passkey" || (s.tipo === "password" && persone.length > 1) ? pulsante("rimuoviSlot", "Rimuovi", `data-id="${e(s.id)}"`) : ""}</div>`).join("");
+      ${s.tipo !== "recupero" && accessi.length > 1 ? pulsante("rimuoviSlot", "Rimuovi", `data-id="${e(s.id)}"`) : ""}</div>`).join("");
+    // Subito dopo lo sblocco non serve riconfermare; poi si conferma con password o passkey.
+    const confermaRecente = chiaveModifiche && Date.now() < scadenzaModifiche;
+    const campoConferma = nome => confermaRecente || !haPassword() ? ""
+      : campoPassword(nome, haPasskey() ? "La tua password attuale (o lascia vuoto e conferma con la passkey)" : "La tua password attuale", "current-password");
+    const notaConferma = confermaRecente ? "Hai appena aperto la cassaforte: non serve riconfermare."
+      : haPassword() ? "Per confermare serve la password di chi fa la modifica" + (haPasskey() ? ", oppure la sua passkey." : ".") : "Per confermare ti verrà chiesta la tua passkey.";
     return `<div class="card cf">${intestazione(pulsante("lista", "&larr; Torna alle voci") + pulsante("blocca", "&#128274; Blocca"))}
       ${avviso()}
       <h4 style="margin:6px 0">Chi può aprire la cassaforte</h4>
       ${elenco}
-      <h4 style="margin:18px 0 6px">Aggiungi una persona o cambia una password</h4>
-      <p class="sub">Ognuno ha la sua password. Per confermare serve la password di chi sta facendo la modifica.</p>
+      <datalist id="cfNomi">${nomi.map(n => `<option value="${e(n)}">`).join("")}</datalist>
+      <h4 style="margin:18px 0 6px">&#128241; Passkey (impronta / Face ID)</h4>
+      <p class="sub">Ognuno può avere la sua. La passkey resta sul dispositivo dove la crei (e nel suo gestore delle password Google o iCloud): <b>per Chiara, falla sul suo telefono</b>. Apri lì la cassaforte con la tua passkey inquadrando il QR code col tuo telefono, poi aggiungi la sua. ${notaConferma}</p>
+      ${passkeyDisponibili() ? `<div class="cf-form">
+        <label class="cf-campo"><span>Di chi è la passkey</span><input type="text" data-cf-input="nomePasskey" list="cfNomi" autocomplete="off" placeholder="es. Chiara"></label>
+        ${campoConferma("attualePasskey")}
+      </div>
+      ${pulsante("aggiungiPasskey", "Aggiungi passkey su questo dispositivo", vista.attesa ? "disabled" : "")}` : `<p class="cf-errore">Questo browser non supporta le passkey.</p>`}
+      <h4 style="margin:18px 0 6px">Password (facoltativa)</h4>
+      <p class="sub">Utile su un dispositivo che non supporta le passkey. Scrivi un nome esistente per cambiarne la password. ${notaConferma}</p>
       <div class="cf-form">
-        <label class="cf-campo"><span>Nome</span><input type="text" data-cf-input="nome" list="cfNomi" autocomplete="off" placeholder="es. Chiara"><datalist id="cfNomi">${persone.map(s => `<option value="${e(s.nome)}">`).join("")}</datalist></label>
-        ${campoPassword("attuale", "La tua password attuale", "current-password")}
+        <label class="cf-campo"><span>Nome</span><input type="text" data-cf-input="nome" list="cfNomi" autocomplete="off" placeholder="es. Chiara"></label>
+        ${campoConferma("attuale")}
         ${campoPassword("password", "Nuova password", "new-password")}
         ${campoPassword("conferma", "Ripeti la nuova password", "new-password")}
       </div>
-      <button class="add-btn" data-cf="salvaSlot" ${vista.attesa ? "disabled" : ""}>Salva password</button>
-      <h4 style="margin:18px 0 6px">&#128241; Passkey del telefono</h4>
-      <p class="sub">Con una passkey apri la cassaforte con impronta o Face ID e, se dimentichi la password, la reimposti. Si salva nel gestore delle password del telefono (Google o iCloud) e su PC si usa inquadrando il QR code col telefono. Serve un browser che supporti l'estensione PRF: Chrome o Safari recenti.</p>
-      ${passkeyDisponibili() ? `<div class="cf-form">
-        <label class="cf-campo"><span>Di chi è la passkey</span><input type="text" data-cf-input="nomePasskey" list="cfNomi" autocomplete="off" placeholder="es. Cosimo"></label>
-        ${campoPassword("attualePasskey", "La tua password attuale", "current-password")}
-      </div>
-      ${pulsante("aggiungiPasskey", "Aggiungi passkey", vista.attesa ? "disabled" : "")}` : `<p class="cf-errore">Questo browser non supporta le passkey.</p>`}
+      <button class="range-btn" data-cf="salvaSlot" ${vista.attesa ? "disabled" : ""}>Salva password</button>
       <h4 style="margin:18px 0 6px">Chiave di recupero</h4>
       <p class="sub">Se l'hai persa o pensi che qualcuno l'abbia vista, generane una nuova: quella vecchia smette di funzionare.</p>
-      <div class="cf-form">${campoPassword("attualeRecupero", "La tua password attuale", "current-password")}</div>
+      <div class="cf-form">${campoConferma("attualeRecupero")}</div>
       ${pulsante("nuovoRecupero", "Genera nuova chiave di recupero")}
       <h4 style="margin:18px 0 6px">Copia di sicurezza</h4>
       <p class="sub">Scarica un file con tutte le voci, ancora cifrate: senza password o chiave di recupero è illeggibile.</p>
@@ -417,63 +454,60 @@ const Cassaforte = (() => {
     finally { vista.attesa = false; render(); }
   }
 
-  async function crea(){
+  async function crea(conPasskey){
     const nome = valoreInput("nome").trim() || "Cosimo", password = valoreInput("password");
-    const errore = passwordValida(password, valoreInput("conferma"));
+    const errore = conPasskey ? "" : passwordValida(password, valoreInput("conferma"));
     if (errore) { vista.errore = errore; return render(); }
     await conAttesa(async () => {
       const k = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
       const recupero = nuovaChiaveRecupero();
-      const slots = [await creaSlot(k, password, nome, "password"), await creaSlot(k, recupero, "Chiave di recupero", "recupero")];
+      const accesso = conPasskey ? await creaSlotPasskey(k, nome) : await creaSlot(k, password, nome, "password");
+      const slots = [accesso, await creaSlot(k, recupero, "Chiave di recupero", "recupero")];
       const ref = col().doc(DOC_CHIAVI);
       // In transazione: non sovrascrive una cassaforte creata nel frattempo da un altro dispositivo.
       await db.runTransaction(async tx => {
         if ((await tx.get(ref)).exists) throw new Error("La cassaforte esiste già: ricarica la pagina.");
         tx.set(ref, { versione: 1, slots, creato: Date.now(), aggiornato: Date.now() });
       });
-      sblocca(await nonEstraibile(k));
+      await sblocca(k);
       vista.chiaveRecupero = recupero;
     });
+  }
+  async function chiaveDaRecupero(codice){
+    const slotRec = (chiavi.slots || []).find(s => s.tipo === "recupero");
+    try { return await apriSlot(slotRec, normalizzaRecupero(codice), true); }
+    catch (err) { throw new Error("Chiave di recupero errata."); }
   }
 
   async function azione(nome, el){
     ultimoUso = Date.now();
-    if (nome === "crea") return crea();
+    if (nome === "crea") return crea(false);
+    if (nome === "creaPasskey") return crea(true);
     if (nome === "chiudiRecupero") {
       if (!(document.querySelector('[data-cf-input="presaNota"]') || {}).checked) { vista.errore = "Conferma di averla scritta prima di continuare."; return render(); }
       vista.chiaveRecupero = null; vista.errore = ""; return render();
     }
     if (nome === "sblocca") {
       const password = valoreInput("password");
-      return conAttesa(async () => { sblocca((await apriConPassword(password, false)).chiave); });
+      return conAttesa(async () => { await sblocca((await apriConPassword(password, true)).chiave); });
     }
-    if (nome === "sbloccaPasskey") return conAttesa(async () => { sblocca((await apriConPasskey(false)).chiave); });
-    if (nome === "recuperaPasskey") {
-      const persona = valoreInput("nome"), password = valoreInput("password");
-      const errore = passwordValida(password, valoreInput("conferma"));
-      if (errore) { vista.errore = errore; return render(); }
-      return conAttesa(async () => {
-        const { chiave: k } = await apriConPasskey(true);
-        const nuovo = await creaSlot(k, password, persona, "password");
-        await aggiornaSlot(slots => slots.filter(s => !(s.tipo === "password" && s.nome === persona)).concat(nuovo));
-        sblocca(await nonEstraibile(k));
-        vista.messaggio = `Password di ${persona} cambiata.`;
-      });
-    }
+    if (nome === "sbloccaPasskey") return conAttesa(async () => { await sblocca((await apriConPasskey(true)).chiave); });
     if (nome === "mostraRecupero") { vista.modo = "recupero"; vista.errore = ""; return render(); }
     if (nome === "annullaRecupero") { vista = vistaIniziale(); return render(); }
-    if (nome === "recupera") {
-      const codice = normalizzaRecupero(valoreInput("recupero")), persona = valoreInput("nome"), password = valoreInput("password");
-      const errore = passwordValida(password, valoreInput("conferma"));
+    if (nome === "recupera" || nome === "recuperaPasskey" || nome === "recuperaNuovaPasskey") {
+      // I campi si leggono prima di conAttesa, che ridisegna il modulo.
+      const persona = valoreInput("nome").trim(), password = valoreInput("password"), codice = valoreInput("recupero");
+      if (!persona) { vista.errore = "Scrivi il tuo nome."; return render(); }
+      const errore = nome === "recuperaNuovaPasskey" ? "" : passwordValida(password, valoreInput("conferma"));
       if (errore) { vista.errore = errore; return render(); }
       return conAttesa(async () => {
-        const slotRec = (chiavi.slots || []).find(s => s.tipo === "recupero");
-        let k;
-        try { k = await apriSlot(slotRec, codice, true); } catch (err) { throw new Error("Chiave di recupero errata."); }
-        const nuovo = await creaSlot(k, password, persona, "password");
-        await aggiornaSlot(slots => slots.filter(s => !(s.tipo === "password" && s.nome === persona)).concat(nuovo));
-        sblocca(await nonEstraibile(k));
-        vista.messaggio = `Password di ${persona} cambiata.`;
+        const k = nome === "recuperaPasskey" ? (await apriConPasskey(true)).chiave : await chiaveDaRecupero(codice);
+        const nuovaPasskey = nome === "recuperaNuovaPasskey";
+        const nuovo = nuovaPasskey ? await creaSlotPasskey(k, persona) : await creaSlot(k, password, persona, "password");
+        // Una nuova password sostituisce quella vecchia della stessa persona; una passkey si aggiunge.
+        await aggiornaSlot(slots => (nuovaPasskey ? slots : slots.filter(s => !(s.tipo === "password" && s.nome.toLowerCase() === persona.toLowerCase()))).concat(nuovo));
+        await sblocca(k);
+        vista.messaggio = nuovaPasskey ? `Nuova passkey di ${persona} creata. Se hai perso il vecchio telefono, rimuovi la sua passkey da Impostazioni.` : `Password di ${persona} impostata.`;
       });
     }
     if (!chiave) return;
@@ -514,7 +548,7 @@ const Cassaforte = (() => {
       const errore = passwordValida(password, valoreInput("conferma"));
       if (errore) { vista.errore = errore; return render(); }
       return conAttesa(async () => {
-        const { chiave: k } = await apriConPassword(attuale, true);
+        const k = await confermaIdentita(attuale);
         const nuovo = await creaSlot(k, password, persona, "password");
         await aggiornaSlot(slots => slots.filter(s => !(s.tipo === "password" && s.nome.toLowerCase() === persona.toLowerCase())).concat(nuovo));
         vista.messaggio = `Password di ${persona} salvata.`;
@@ -529,7 +563,7 @@ const Cassaforte = (() => {
       return conAttesa(async () => {
         await aggiornaSlot(slots => {
           const resto = slots.filter(s => s.id !== id);
-          if (!resto.some(s => s.tipo === "password")) throw new Error("Deve restare almeno una password.");
+          if (!resto.some(s => s.tipo !== "recupero")) throw new Error("Deve restare almeno una passkey o una password.");
           return resto;
         });
         vista.messaggio = "Accesso rimosso.";
@@ -539,7 +573,7 @@ const Cassaforte = (() => {
       const persona = valoreInput("nomePasskey").trim(), attuale = valoreInput("attualePasskey");
       if (!persona) { vista.errore = "Scrivi di chi è la passkey."; return render(); }
       return conAttesa(async () => {
-        const { chiave: k } = await apriConPassword(attuale, true);
+        const k = await confermaIdentita(attuale);
         const nuovo = await creaSlotPasskey(k, persona);
         await aggiornaSlot(slots => slots.concat(nuovo));
         vista.messaggio = `Passkey di ${persona} aggiunta: prova a bloccare e sbloccare con “Usa la passkey”.`;
@@ -548,7 +582,7 @@ const Cassaforte = (() => {
     if (nome === "nuovoRecupero") {
       const attuale = valoreInput("attualeRecupero");
       return conAttesa(async () => {
-        const { chiave: k } = await apriConPassword(attuale, true);
+        const k = await confermaIdentita(attuale);
         const recupero = nuovaChiaveRecupero();
         const nuovo = await creaSlot(k, recupero, "Chiave di recupero", "recupero");
         await aggiornaSlot(slots => slots.filter(s => s.tipo !== "recupero").concat(nuovo));
