@@ -793,7 +793,7 @@ function meseCassaAmex(t){
 function disponibileOggi(){
   const s = inboxStato || {};
   if (s.saldoBper == null || !s.saldoBperData) return null;
-  const saldo = Number(s.saldoBper), dataSaldo = new Date(s.saldoBperData);
+  const saldo = Number(s.saldoBper), dataSaldo = dataEffettivaSaldo(s.saldoBperData);
   const anno = dataSaldo.getFullYear(), mese = dataSaldo.getMonth()+1;
   // AMEX: addebitate sul conto fino al mese dell'ultimo addebito visto da BPER; senza
   // questa informazione si assume addebitato il mese del saldo (addebito a inizio mese).
@@ -1124,7 +1124,14 @@ function currentTx(){
 function renderMeseView(){
   const years = getYears();
   const disp = disponibileOggi();
-  const quandoSaldo = !disp ? '' : `al ${disp.dataSaldo.toLocaleDateString("it-IT")} ore ${disp.dataSaldo.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"})}`;
+  // Apre la pagina dello script, che legge subito saldo e movimenti da BPER;
+  // l'app si aggiorna da sola quando lo script scrive su Firestore.
+  const urlSync = inboxStato && inboxStato.paginaConsenso ? inboxStato.paginaConsenso + "?sync=1" : null;
+  const bottoneSync = urlSync ? `<a href="${escapeHtml(urlSync).replace(/"/g,"&quot;")}" target="_blank" rel="noopener" style="display:inline-block;margin-top:10px;padding:6px 12px;border-radius:6px;border:1px solid rgba(255,255,255,.4);color:#fff;text-decoration:none;font-size:12px;font-weight:600">↻ Aggiorna saldo</a>` : '';
+  // Saldo di chiusura (contabile a fine giornata) o lettura in corso di giornata.
+  const quandoSaldo = !disp ? '' : disp.dataSaldo.getHours()===23 && disp.dataSaldo.getMinutes()===59
+    ? `contabile a fine giornata del ${disp.dataSaldo.toLocaleDateString("it-IT")}`
+    : `al ${disp.dataSaldo.toLocaleDateString("it-IT")} ore ${disp.dataSaldo.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"})}`;
   const rigaDisp = (etichetta, valore, segno) => `<div style="display:flex;justify-content:space-between;gap:12px"><span>${etichetta}</span><span style="font-family:ui-monospace,Menlo,monospace">${segno}${eur(Math.abs(valore))}</span></div>`;
   const tx = currentTx();
   const entrate = tx.filter(t=>t.categoria==="Entrate").reduce((s,t)=>s+t.importo,0);
@@ -1205,7 +1212,7 @@ function renderMeseView(){
         ${disp.amexDaAddebitare?rigaDisp("Spese AMEX non ancora addebitate", disp.amexDaAddebitare, "−"):''}
         ${disp.rateInAnticipo?rigaDisp("Rate già pagate in anticipo", disp.rateInAnticipo, "+"):''}
         ${disp.rataNonAddebitata?rigaDisp("Rata del mese non ancora addebitata", disp.rataNonAddebitata, "−"):''}
-      </div>`:`<div class="balance-meta">In attesa del saldo dal conto BPER: arriva alla prossima sincronizzazione (Admin → Sincronizzazione automatica banca).</div>`}</div>
+      </div>`:`<div class="balance-meta">In attesa del saldo dal conto BPER: arriva alla prossima sincronizzazione (Admin → Sincronizzazione automatica banca).</div>`}${bottoneSync}</div>
     <div class="summary-grid">
       <div class="card summary-card"><div class="summary-label">Entrate</div><div class="summary-value" style="color:${GREEN}">${eur(entrate)}</div>${pctBadge(pctEntrate, true)}</div>
       <div class="card summary-card"><div class="summary-label">Uscite</div><div class="summary-value" style="color:${RUST}">${eur(uscite)}</div>${pctBadge(pctUscite, false)}</div>
@@ -2080,7 +2087,7 @@ function renderSaldoView(){
     const saldo = rec ? rec.saldo : null;
     const meseInCorso = m.anno===oggiAnno && m.mese===oggiMese;
     const origine = !rec || saldo==null ? '' : rec.fonte==="BPER"
-      ? `<div class="sub" style="margin:0;font-size:10px">${meseInCorso?'provvisorio, ':''}BPER ${escapeHtml(new Date(rec.data).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit"}))}</div>`
+      ? `<div class="sub" style="margin:0;font-size:10px">${meseInCorso?'provvisorio, ':''}BPER ${escapeHtml(dataEffettivaSaldo(rec.data).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit"}))}</div>`
       : `<div class="sub" style="margin:0;font-size:10px">inserito a mano</div>`;
     const idx = sortedKeys.indexOf(key);
     const prevK = idx>0 ? sortedKeys[idx-1] : null;
@@ -4354,12 +4361,18 @@ const REGOLE_CATEGORIA = [
   [/yada energia|enel energia|\bhera\b|\ba2a\b|\biren\b|edison|plenitude|sorgenia|octopus/i, "Elettricità/Gas"],
   [/fastweb|\btim\b|vodafone|iliad|windtre|wind tre|\bsky\b|ho\. mobile|very mobile/i, "TV/internet/Cell"]
 ];
+// BPER dà il saldo contabile di chiusura (CLBD) datato a mezzanotte del giorno
+// dopo: "22/10 00:00" è la chiusura del 21/10, e "01/11 00:00" quella di ottobre.
+function dataEffettivaSaldo(iso){
+  const d = new Date(iso);
+  return d.getHours()===0 && d.getMinutes()===0 && d.getSeconds()===0 ? new Date(d.getTime()-1) : d;
+}
 // Il saldo del mese in Saldo Conto è l'ultima lettura BPER di quel mese: a fine
-// mese coincide (a meno di qualche ora) con il saldo di chiusura.
+// mese coincide con il saldo di chiusura.
 function registraSaldoMensileDaBper(){
   const s = inboxStato || {};
   if (s.saldoBper == null || !s.saldoBperData) return;
-  const d = new Date(s.saldoBperData), key = monthKey(d.getFullYear(), d.getMonth()+1);
+  const d = dataEffettivaSaldo(s.saldoBperData), key = monthKey(d.getFullYear(), d.getMonth()+1);
   const attuale = state.saldoConto[key];
   if (attuale && attuale.fonte==="BPER" && attuale.data >= s.saldoBperData) return;
   state.saldoConto[key] = {saldo: Number(s.saldoBper), fonte: "BPER", data: s.saldoBperData};
@@ -4415,7 +4428,7 @@ function renderImpostazioniSync(){
     <label class="sub" style="display:block;margin:0 0 10px">Importa i movimenti a partire dal<br><input type="date" id="syncDal" value="${esc(imp.dal)}" style="padding:6px;border:1px solid var(--border-soft);border-radius:6px"></label>
     <label class="sub" style="display:block;margin:0 0 10px">Non importare i movimenti la cui causale contiene (una parola per riga)<br><textarea id="syncEscludi" rows="5" style="width:100%;padding:6px;border:1px solid var(--border-soft);border-radius:6px">${esc(imp.escludi.join("\n"))}</textarea></label>
     <button class="add-btn" id="salvaSyncBtn">Salva impostazioni</button>
-    <p class="sub" id="syncInfo" style="margin:12px 0 0">Ultima lettura BPER: ${esc(quando(s.ultimaSyncBper))} · consenso BPER valido fino al ${s.consensoBperFino?esc(new Date(s.consensoBperFino).toLocaleDateString("it-IT")):'—'}${s.paginaConsenso?` · <a href="${esc(s.paginaConsenso)}" target="_blank" rel="noopener">rinnova</a>`:''}</p>
+    <p class="sub" id="syncInfo" style="margin:12px 0 0">Ultima lettura BPER: ${esc(quando(s.ultimaSyncBper))} · consenso BPER valido fino al ${s.consensoBperFino?esc(new Date(s.consensoBperFino).toLocaleDateString("it-IT")):'—'}${s.paginaConsenso?` · <a href="${esc(s.paginaConsenso)}?sync=1" target="_blank" rel="noopener">aggiorna ora</a> · <a href="${esc(s.paginaConsenso)}" target="_blank" rel="noopener">rinnova</a>`:''}</p>
   </div>`;
 }
 function bindImpostazioniSync(){

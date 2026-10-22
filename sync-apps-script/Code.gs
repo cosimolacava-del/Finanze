@@ -15,6 +15,7 @@ const EB_API = "https://api.enablebanking.com";
 const INBOX = "bilancio_familiare_inbox";
 const DOC_STATO = "_stato_sync";
 const GIORNI_RILETTURA = 7; // rilegge sempre gli ultimi giorni: la banca può contabilizzare in ritardo
+const APP_URL = "https://cosimolacava-del.github.io/Finanze/";
 
 function prop(k, def) {
   const v = PropertiesService.getScriptProperties().getProperty(k);
@@ -72,6 +73,7 @@ function eb(method, path, body) {
 function doGet(e) {
   const p = (e && e.parameter) || {};
   if (p.code) return completaConsenso(p);
+  if (p.sync) return paginaStato(esitoSincronizzazione(sincronizzaBper()));
   // La pagina dello script gira in un iframe: la banca va aperta nella finestra
   // principale (target _top), altrimenti molte banche rifiutano di caricarsi.
   if (p.avvia) return HtmlService.createHtmlOutput(
@@ -120,8 +122,20 @@ function paginaStato(msg) {
     "<h2>Sincronizzazione BPER</h2>" +
     (msg ? "<p><b>" + msg + "</b></p>" : "") +
     "<p>Consenso valido fino a: <b>" + (scad ? new Date(scad).toLocaleDateString("it-IT") : "non collegato") + "</b></p>" +
-    '<p><a href="' + url + '?avvia=1" target="_top">Collega / rinnova BPER</a></p></div>'
+    '<p><a href="' + url + '?sync=1" target="_top">Aggiorna saldo e movimenti ora</a> · ' +
+    '<a href="' + url + '?avvia=1" target="_top">Collega / rinnova BPER</a> · ' +
+    '<a href="' + APP_URL + '" target="_top">Torna all\'app</a></p></div>'
   );
+}
+
+// Messaggio per la pagina, dal riepilogo di sincronizzaBper.
+function esitoSincronizzazione(r) {
+  if (r.errore) return "Sincronizzazione non riuscita: " + r.errore;
+  if (r.occupato) return "C'è già una sincronizzazione in corso: riprova tra un minuto.";
+  if (!r.attiva) return "La sincronizzazione è disattivata nell'app (Admin → Sincronizzazione automatica banca).";
+  return "Fatto: " + r.nuovi + " nuovi movimenti da confermare" +
+    (r.saldo ? ", saldo " + r.saldo.importo.toLocaleString("it-IT", { style: "currency", currency: "EUR" }) : ", saldo non disponibile") +
+    ". L'app si aggiorna da sola.";
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +149,9 @@ function leggiImpostazioni() {
     headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
     muteHttpExceptions: true
   });
+  // Documento mancante (404) = impostazioni predefinite; ogni altro errore (es. quota
+  // Firestore esaurita) deve emergere, non trasformarsi in "sincronizzazione spenta".
+  if (r.getResponseCode() !== 200 && r.getResponseCode() !== 404) throw new Error("Firestore → " + r.getResponseCode() + ": " + r.getContentText().slice(0, 200));
   const f = r.getResponseCode() === 200 ? (JSON.parse(r.getContentText()).fields || {}) : {};
   const escludi = f.escludi && f.escludi.arrayValue
     ? (f.escludi.arrayValue.values || []).map(v => String(v.stringValue || "").toLowerCase()).filter(Boolean)
@@ -152,11 +169,26 @@ function daImportare(imp, data, descr) {
   return !imp.escludi.some(p => d.indexOf(p) >= 0);
 }
 
+// Chiamata dagli avvii automatici e dal pulsante "Aggiorna saldo" dell'app (?sync=1).
+// Il lock evita due sincronizzazioni insieme; restituisce un riepilogo per la pagina.
 function sincronizzaBper() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) return { occupato: true };
+  try {
+    return eseguiSincronizzazioneBper();
+  } catch (e) {
+    console.log("Sincronizzazione BPER non riuscita: " + e.message);
+    return { errore: e.message };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function eseguiSincronizzazioneBper() {
   const imp = leggiImpostazioni();
-  if (!imp.attiva) { console.log("Sincronizzazione disattivata nell'app"); return; }
+  if (!imp.attiva) { console.log("Sincronizzazione disattivata nell'app"); return { attiva: false }; }
   const accounts = JSON.parse(prop("EB_ACCOUNTS", "[]"));
-  if (!accounts.length) return;
+  if (!accounts.length) return { errore: "nessun conto collegato" };
   // Chiediamo sempre l'ultima settimana (la banca contabilizza in ritardo); la data
   // di partenza scelta nell'app si applica alla data d'acquisto, in inboxDaBper.
   // La prima volta si guarda indietro di 45 giorni per trovare l'ultimo addebito
@@ -187,6 +219,7 @@ function sincronizzaBper() {
   }
   scriviStato();
   console.log("BPER: " + nuovi + " nuovi movimenti" + (saldo ? ", saldo " + saldo.importo + " (" + saldo.tipo + ")" : ""));
+  return { attiva: true, nuovi: nuovi, saldo: saldo };
 }
 
 // Saldo contabile (solo movimenti contabilizzati, coerente con l'import); se la
