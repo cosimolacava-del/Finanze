@@ -820,6 +820,38 @@ function disponibileOggi(){
     valore: saldo - amexDaAddebitare + rateInAnticipo - rataNonAddebitata };
 }
 
+// Piccolo grafico del saldo del conto nell'anno: un punto per ogni fine mese
+// (Saldo Conto: ultima lettura BPER del mese, o il saldo inserito a mano in
+// passato). Il mese in corso è provvisorio: punto vuoto.
+function graficoSaldoAnno(anno){
+  const oggi = new Date(), meseCorrente = oggi.getFullYear()===anno ? oggi.getMonth()+1 : 13;
+  const punti = Object.entries(state.saldoConto || {})
+    .map(([k, v]) => { const [a, m] = k.split("-").map(Number); return {a, m, saldo: v && Number(v.saldo)}; })
+    .filter(p => p.a===anno && Number.isFinite(p.saldo)).sort((x, y) => x.m - y.m);
+  if (!punti.length) return '';
+  const W = 300, H = 64, padX = 8, padTop = 8, padBottom = 16;
+  const valori = punti.map(p => p.saldo), min = Math.min(...valori), max = Math.max(...valori), span = max - min || 1;
+  const x = m => padX + (m-1) * (W - 2*padX) / 11;
+  const y = v => padTop + (1 - (v - min) / span) * (H - padTop - padBottom);
+  const linea = punti.map((p, i) => `${i ? "L" : "M"}${x(p.m).toFixed(1)},${y(p.saldo).toFixed(1)}`).join(" ");
+  const etichette = [1, 4, 7, 10, 12].map(m => `<text x="${x(m)}" y="${H-3}" text-anchor="middle" font-size="9" fill="rgba(255,255,255,.55)">${MESI[m-1].slice(0,3)}</text>`).join("");
+  const marcatori = punti.map(p => {
+    const provvisorio = p.m === meseCorrente, testo = `${MESI[p.m-1]} ${anno}: ${eur(p.saldo)}${provvisorio ? " (provvisorio)" : " (fine mese)"}`;
+    return `<g><title>${escapeHtml(testo)}</title>
+      <circle cx="${x(p.m)}" cy="${y(p.saldo)}" r="10" fill="transparent"/>
+      <circle cx="${x(p.m)}" cy="${y(p.saldo)}" r="4" fill="${provvisorio ? "#344A61" : "#fff"}" stroke="#fff" stroke-width="2"/></g>`;
+  }).join("");
+  return `<div style="margin-top:12px">
+    <div class="balance-meta">Saldo a fine mese, ${anno}</div>
+    <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" role="img" aria-label="Saldo del conto a fine mese nel ${anno}" style="display:block;overflow:visible">
+      <line x1="${padX}" x2="${W-padX}" y1="${H-padBottom}" y2="${H-padBottom}" stroke="rgba(255,255,255,.18)" stroke-width="1"/>
+      ${punti.length > 1 ? `<path d="${linea}" fill="none" stroke="rgba(255,255,255,.85)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` : ''}
+      ${marcatori}${etichette}
+    </svg>
+    ${punti.length < 2 ? `<div class="balance-meta">Il grafico si completa con il saldo di ogni fine mese.</div>` : ''}
+  </div>`;
+}
+
 function datiObiettiviRisparmio(){
   const disp = disponibileOggi();
   if (!disp) return {saldo:null, media:null, periodo:null, obiettivi:[]};
@@ -1233,7 +1265,7 @@ function renderMeseView(){
         ${disp.amexDaAddebitare?rigaDisp("Spese AMEX non ancora addebitate", disp.amexDaAddebitare, "−"):''}
         ${disp.rateInAnticipo?rigaDisp("Rate già pagate in anticipo", disp.rateInAnticipo, "+"):''}
         ${disp.rataNonAddebitata?rigaDisp("Rata del mese non ancora addebitata", disp.rataNonAddebitata, "−"):''}
-      </div>`:`<div class="balance-meta">In attesa del saldo dal conto BPER: arriva alla prossima sincronizzazione (Admin → Sincronizzazione automatica banca).</div>`}${bottoneSync}</div>
+      </div>`:`<div class="balance-meta">In attesa del saldo dal conto BPER: arriva alla prossima sincronizzazione (Admin → Sincronizzazione automatica banca).</div>`}${graficoSaldoAnno(disp ? disp.anno : new Date().getFullYear())}${bottoneSync}</div>
     <div class="summary-grid">
       <div class="card summary-card"><div class="summary-label">Entrate</div><div class="summary-value" style="color:${GREEN}">${eur(entrate)}</div>${pctBadge(pctEntrate, true)}</div>
       <div class="card summary-card"><div class="summary-label">Uscite</div><div class="summary-value" style="color:${RUST}">${eur(uscite)}</div>${pctBadge(pctUscite, false)}</div>
