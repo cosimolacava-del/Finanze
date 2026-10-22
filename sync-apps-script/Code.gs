@@ -247,7 +247,18 @@ function inboxDaBper(acc, t, imp) {
   if (t.status ? t.status !== "BOOK" : !t.booking_date) return false;
   const descr = [].concat(t.remittance_information || []).join(" ").trim()
     || (t.creditor && t.creditor.name) || (t.debtor && t.debtor.name) || "Movimento BPER";
-  if (/\bmutuo\b/i.test(descr)) ricordaAddebito("ULTIMO_ADDEBITO_MUTUO", t.booking_date);
+  const importo = Math.abs(Number(t.transaction_amount && t.transaction_amount.amount));
+  const entrata = t.credit_debit_indicator === "CRDT";
+  const ref = t.entry_reference || t.transaction_id || [t.booking_date, importo, descr].join("|");
+  const id = "bper_" + hashBreve(acc + "|" + ref);
+  const base = { fonte: "bper", importo: importo, entrata: entrata, descrizione: descr.replace(/\s+/g, " ").slice(0, 200), amex: false };
+  // Addebito trimestrale del mutuo (su BPER "RATA FINANZIAMENTO"): l'app lo divide
+  // da sola in tre rate mensili. Vale anche se precede la data di partenza, perché
+  // copre i mesi successivi.
+  if (!entrata && /\b(mutuo|rata finanziamento)\b/i.test(descr)) {
+    ricordaAddebito("ULTIMO_ADDEBITO_MUTUO", t.booking_date);
+    return creaInbox(id, Object.assign({}, base, { data: t.booking_date, tipo: "rata_trimestrale" }));
+  }
   // L'addebito mensile AMEX: le spese le registri tu una per una con la spunta AMEX;
   // come fa l'app nella riconciliazione, lo escludiamo per non contarlo due volte.
   if (/\b(american express|americanexpress|amex)\b/i.test(descr)) { ricordaAddebito("ULTIMO_ADDEBITO_AMEX", t.booking_date); return false; }
@@ -255,18 +266,22 @@ function inboxDaBper(acc, t, imp) {
   // le spese con carta BPER lo riportano nella causale ("... del 16.10.2026").
   const mDel = descr.match(/\bdel (\d{2})\.(\d{2})\.(\d{4})\b/);
   const data = mDel ? mDel[3] + "-" + mDel[2] + "-" + mDel[1] : (t.transaction_date || t.value_date || t.booking_date);
+  // Stipendi: l'app li registra da soli con la tredicesima spalmata (prima delle
+  // parole escluse, che contengono "emolumenti" e "stipendio").
+  const stipendio = entrata && REGOLE_STIPENDIO.find(r => r.re.test(descr));
+  if (stipendio) {
+    if (imp.dal && data < imp.dal) return false;
+    return creaInbox(id, Object.assign({}, base, { data: data, tipo: "stipendio", voce: stipendio.voce }));
+  }
   if (!daImportare(imp, data, descr)) return false;
-  const importo = Math.abs(Number(t.transaction_amount && t.transaction_amount.amount));
-  const ref = t.entry_reference || t.transaction_id || [t.booking_date, importo, descr].join("|");
-  return creaInbox("bper_" + hashBreve(acc + "|" + ref), {
-    fonte: "bper",
-    data: data,
-    importo: importo,
-    entrata: t.credit_debit_indicator === "CRDT",
-    descrizione: descr.replace(/\s+/g, " ").slice(0, 200),
-    amex: false
-  });
+  return creaInbox(id, Object.assign({}, base, { data: data }));
 }
+
+// Accrediti riconosciuti come stipendio e voce di entrata dell'app a cui vanno.
+const REGOLE_STIPENDIO = [
+  { re: /\bemolumenti\b/i, voce: "Stipendio Cosimo" },
+  { re: /scuola internazionale/i, voce: "Stipendio Chiara" }
+];
 
 // ---------------------------------------------------------------------------
 // Email di avviso AMEX

@@ -4245,6 +4245,9 @@ function dopoCambiamentiMovimenti(){
   generaMovimentiRicorrenti();
   render();
   setCloudStatus("☁️ sincronizzato");
+  // Solo con i movimenti già caricati si possono riconoscere doppioni e ricorrenze.
+  movimentiPronti = true;
+  elaboraMovimentiAutomatici();
 }
 function applicaMovimentoRemoto(id, dati, ms){
   if (ms != null && ultimoCambiamentoApplicato[id] != null && ms < ultimoCambiamentoApplicato[id]) return;
@@ -4358,6 +4361,7 @@ function initInboxSync(){
   if (!cloudReady || !inboxColRef) return;
   inboxColRef.where("stato","in",["da_confermare"]).onSnapshot(snap => {
     inboxItems = snap.docs.filter(d => d.id !== INBOX_DOC_STATO).map(d => ({...d.data(), id:d.id}));
+    elaboraMovimentiAutomatici();
     if (state.tab === "mese") render();
   }, err => console.error("Errore movimenti da confermare", err));
   inboxColRef.doc(INBOX_DOC_STATO).onSnapshot(d => {
@@ -4435,8 +4439,10 @@ function impostazioniSync(){
 }
 function inboxVisibili(){
   const imp = impostazioniSync();
-  return inboxItems.filter(it => (!imp.dal || String(it.data) >= imp.dal) &&
-    !imp.escludi.some(p => p && String(it.descrizione||"").toLowerCase().includes(String(p).toLowerCase())));
+  // Mutuo e stipendi riconosciuti (con "tipo") si vedono qui solo se l'inserimento
+  // automatico si è fermato (es. voce già inserita a mano): mai nascosti dalle esclusioni.
+  return inboxItems.filter(it => it.tipo || ((!imp.dal || String(it.data) >= imp.dal) &&
+    !imp.escludi.some(p => p && String(it.descrizione||"").toLowerCase().includes(String(p).toLowerCase()))));
 }
 function renderImpostazioniSync(){
   const imp = impostazioniSync(), s = inboxStato || {};
@@ -4499,6 +4505,116 @@ function renderInbox(){
     <div class="sub" style="margin:0 0 8px">Movimenti scaricati in automatico${ultima?` \u00B7 ultima lettura BPER ${esc(ultima)}`:''}</div>
     ${avvisoConsenso}${righe}
   </div>`;
+}
+// ---------- inserimenti automatici da BPER: mutuo trimestrale e stipendi ----------
+// Lo script segnala con "tipo" l'addebito trimestrale del mutuo e gli accrediti di
+// stipendio; qui diventano movimenti senza passare da "Da confermare". Gli id sono
+// deterministici: due dispositivi aperti insieme scrivono gli stessi documenti.
+let movimentiPronti = false;
+const automaticiInCorso = new Set();
+const MESE_TREDICESIMA = 12;
+const arrotonda = x => Math.round(x*100)/100;
+function corrispondeTesto(x, testo){ return String(x.descrizione||"").toLowerCase().includes(String(testo).toLowerCase()); }
+function inseritoAMano(testo, entrata, anno, mese){
+  return state.transazioni.some(t => t.anno===anno && t.mese===mese && (t.categoria==="Entrate")===entrata &&
+    !t.ricorrenteGruppo && !t.automatico && corrispondeTesto(t, testo));
+}
+// Chiude le ricorrenze che generavano questo movimento dal mese indicato in poi e
+// toglie le voci già generate da quel mese: da ora le inserisce la banca.
+function chiudiRicorrenzeDa(testo, entrata, anno, mese){
+  const k0 = anno*12+mese, prima = shiftMonth(anno, mese, -1);
+  const regole = (state.ricorrenti||[]).filter(r => (r.categoria==="Entrate")===entrata && corrispondeTesto(r, testo));
+  if (!regole.length) return;
+  const gruppi = new Set(regole.map(r => r.gruppoId));
+  state.ricorrenti = state.ricorrenti.filter(r => !(regole.includes(r) && r.dalAnno*12+r.dalMese >= k0));
+  state.ricorrenti.forEach(r => {
+    if (regole.includes(r) && (!r.alAnno || r.alAnno*12+r.alMese >= k0)) { r.alAnno = prima.anno; r.alMese = prima.mese; }
+  });
+  saveRicorrenti();
+  state.transazioni.filter(t => gruppi.has(t.ricorrenteGruppo) && t.anno*12+t.mese >= k0).forEach(t => cancellaMovimento(t.id));
+}
+function elaboraRataTrimestrale(it){
+  const cfg = normalizzaSpeseTrimestrali(state.speseTrimestrali||[]).find(c => /mutuo/i.test(c.descrizioneMatch||""));
+  const testo = cfg ? cfg.descrizioneMatch : "mutuo";
+  const [anno, mese, giorno] = String(it.data).split("-").map(Number);
+  // Categoria e descrizione come le rate di prima (ricorrenza o ultima rata registrata).
+  const modello = (state.ricorrenti||[]).find(r => r.categoria!=="Entrate" && corrispondeTesto(r, testo))
+    || [...state.transazioni].filter(t => t.categoria!=="Entrate" && corrispondeTesto(t, testo)).sort((a,b)=>(b.anno*12+b.mese)-(a.anno*12+a.mese))[0]
+    || {categoria: state.categorie.includes("Casa") ? "Casa" : "Varie", descrizione: "Rata mutuo"};
+  chiudiRicorrenzeDa(testo, false, anno, mese);
+  const quota = arrotonda(Number(it.importo)/3), quote = [quota, quota, arrotonda(Number(it.importo)-2*quota)];
+  const dataAddebito = new Date(it.data).toLocaleDateString("it-IT");
+  quote.forEach((importo, i) => {
+    const p = shiftMonth(anno, mese, i);
+    if (inseritoAMano(testo, false, p.anno, p.mese)) return;
+    // Tra parentesi il calcolo: da quale addebito reale viene questa rata.
+    salvaMovimento({id:`auto-${it.id}-${i}`, anno:p.anno, mese:p.mese, giorno: i===0 ? giorno : 1, categoria: modello.categoria,
+      descrizione: `${String(modello.descrizione).replace(/\s*\(.*\)\s*$/, "")} (addebito reale ${eur(it.importo)} del ${dataAddebito}, rata ${i+1} di 3)`,
+      importo, amex:false, automatico:"mutuo", inboxId:it.id, descrizioneBanca:it.descrizione,
+      createdAt:Date.now(), updatedAt:Date.now()});
+  });
+  registraAudit("Rata mutuo divisa in 3 mesi", `${eur(it.importo)} addebitati il ${new Date(it.data).toLocaleDateString("it-IT")}`);
+  aggiornaInbox(it.id, {stato:"confermato", movimentoId:`auto-${it.id}-0`});
+}
+// Stipendio: tredicesima stimata pari a una mensilità e spalmata su 12 mesi, quindi
+// movimento = mensilità ordinaria × 13/12. La tredicesima che arriva a dicembre è
+// già stata contata così nei 12 mesi: va stornata, mai sommata di nuovo.
+function mensilitaDiRiferimento(voce, anno, mese){
+  const k = anno*12+mese;
+  const precedenti = state.transazioni.filter(t => t.categoria==="Entrate" && corrispondeTesto(t, voce) && t.anno*12+t.mese < k)
+    .sort((a,b)=>(b.anno*12+b.mese)-(a.anno*12+a.mese));
+  const auto = precedenti.find(t => t.automatico==="stipendio" && t.accreditoBanca);
+  if (auto) return Number(auto.accreditoBanca);
+  // Prima volta: dai movimenti precedenti, già comprensivi di tredicesima (× 12/13).
+  return precedenti.length ? Number(precedenti[0].importo)*12/13 : null;
+}
+function elaboraStipendio(it){
+  const voce = it.voce, [anno, mese, giorno] = String(it.data).split("-").map(Number);
+  const accredito = Number(it.importo);
+  // Già inserito a mano: resta in "Da confermare" con l'avviso doppione.
+  if (inseritoAMano(voce, true, anno, mese)) return;
+  const giaAutomatico = state.transazioni.find(t => t.automatico==="stipendio" && t.voce===voce && t.anno===anno && t.mese===mese);
+  if (giaAutomatico) {
+    // A dicembre un secondo accredito è la tredicesima pagata a parte: stornata, e
+    // lo si scrive anche nella descrizione dello stipendio del mese.
+    if (mese===MESE_TREDICESIMA) {
+      const t = {...giaAutomatico, tredicesimaStornata: arrotonda((giaAutomatico.tredicesimaStornata||0) + accredito), updatedAt: Date.now()};
+      t.descrizione = String(t.descrizione).replace(/\)$/, `, tredicesima stornata ${eur(accredito)} accreditata a parte il ${new Date(it.data).toLocaleDateString("it-IT")})`);
+      salvaMovimento(t);
+      registraAudit("Tredicesima stornata", `${voce}: accredito ${eur(accredito)} del ${new Date(it.data).toLocaleDateString("it-IT")} non sommato, già spalmato nei 12 mesi`);
+      aggiornaInbox(it.id, {stato:"ignorato"});
+    }
+    return;
+  }
+  let ordinario = accredito, tredicesimaStornata = 0;
+  if (mese===MESE_TREDICESIMA) {
+    // Accredito unico con stipendio + tredicesima: si storna la parte di tredicesima.
+    const riferimento = mensilitaDiRiferimento(voce, anno, mese);
+    if (riferimento && accredito > 1.5*riferimento) { ordinario = riferimento; tredicesimaStornata = arrotonda(accredito - riferimento); }
+  }
+  const importo = arrotonda(ordinario*13/12);
+  // Tra parentesi il calcolo: accredito reale e importo con la tredicesima spalmata.
+  const calcolo = tredicesimaStornata
+    ? `accredito reale ${eur(accredito)}, tredicesima stornata ${eur(tredicesimaStornata)}, mensilità ${eur(ordinario)} con tredicesima ${eur(importo)}`
+    : `accredito reale ${eur(accredito)}, con tredicesima ${eur(importo)}`;
+  chiudiRicorrenzeDa(voce, true, anno, mese);
+  salvaMovimento({id:`auto-${it.id}`, anno, mese, giorno, categoria:"Entrate", descrizione:`${voce} (${calcolo})`, importo,
+    amex:false, automatico:"stipendio", voce, accreditoBanca:ordinario, tredicesimaStornata, inboxId:it.id, descrizioneBanca:it.descrizione,
+    createdAt:Date.now(), updatedAt:Date.now()});
+  registraAudit("Stipendio registrato da BPER", `${voce}: ${calcolo}`);
+  aggiornaInbox(it.id, {stato:"confermato", movimentoId:`auto-${it.id}`});
+}
+function elaboraMovimentiAutomatici(){
+  if (!movimentiPronti || !cloudReady) return;
+  [...inboxItems].filter(it => it.tipo && it.stato==="da_confermare" && !automaticiInCorso.has(it.id))
+    .sort((a,b)=>String(a.data).localeCompare(String(b.data)))
+    .forEach(it => {
+      automaticiInCorso.add(it.id);
+      try {
+        if (it.tipo==="rata_trimestrale") elaboraRataTrimestrale(it);
+        else if (it.tipo==="stipendio" && it.voce) elaboraStipendio(it);
+      } catch(e) { console.error("Inserimento automatico non riuscito", it.id, e); }
+    });
 }
 function bindInbox(){
   document.querySelectorAll("[data-inbox-ok]").forEach(b => b.onclick = () => confermaInbox(b.dataset.inboxOk));
