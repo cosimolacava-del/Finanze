@@ -4497,6 +4497,7 @@ function renderInbox(){
       <select data-inbox-cat="${esc(it.id)}" style="padding:6px;border-radius:6px">${cats.map(c=>`<option ${c===cat?'selected':''}>${esc(c)}</option>`).join('')}</select>
       <button data-inbox-ok="${esc(it.id)}" class="add-btn" style="padding:6px 10px">Conferma</button>
       <button data-inbox-no="${esc(it.id)}" style="padding:6px 10px;border:1px solid var(--border-soft);background:#fff;border-radius:6px;cursor:pointer">Ignora</button>
+      ${it.tipo==="stipendio_da_assegnare"?`<div style="flex-basis:100%;font-size:12px;color:${GOLD}">Sembra uno stipendio ma la causale non è tra quelle riconosciute: confermalo con la voce giusta e dimmi la causale per automatizzarlo.</div>`:''}
       ${dup?`<div style="flex-basis:100%;font-size:12px;color:${RUST}">\u26A0\uFE0F Possibile doppione di \u201C${esc(dup.descrizione)}\u201D (${eur(dup.importo)}) gi\u00E0 inserito a mano</div>`:''}
     </div>`;
   }).join('');

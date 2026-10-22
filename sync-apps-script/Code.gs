@@ -274,15 +274,25 @@ function inboxDaBper(acc, t, imp) {
     if (imp.dal && data < imp.dal) return false;
     return creaInbox(id, Object.assign({}, base, { data: data, tipo: "stipendio", voce: stipendio.voce }));
   }
+  // Un accredito che sembra uno stipendio ma non corrisponde a nessuna regola non
+  // va perso tra le parole escluse: lo si mostra in "Da confermare".
+  if (entrata && SEMBRA_STIPENDIO.test(descr)) {
+    if (imp.dal && data < imp.dal) return false;
+    return creaInbox(id, Object.assign({}, base, { data: data, tipo: "stipendio_da_assegnare" }));
+  }
   if (!daImportare(imp, data, descr)) return false;
   return creaInbox(id, Object.assign({}, base, { data: data }));
 }
 
 // Accrediti riconosciuti come stipendio e voce di entrata dell'app a cui vanno.
+// L'ordine conta: Chiara (scuola pubblica, pagata dal MEF tramite NoiPA) prima di
+// EMOLUMENTI, che potrebbe comparire anche nelle causali NoiPA. I bonifici della
+// Scuola Internazionale sono di fine rapporto: non sono uno stipendio.
 const REGOLE_STIPENDIO = [
-  { re: /\bemolumenti\b/i, voce: "Stipendio Cosimo" },
-  { re: /scuola internazionale/i, voce: "Stipendio Chiara" }
+  { re: /noipa|\bmef\b|s\.?i\.?i\.?t\b|tesoreria (provinciale )?(dello )?stato|spesa fissa/i, voce: "Stipendio Chiara" },
+  { re: /\bemolumenti\b/i, voce: "Stipendio Cosimo" }
 ];
+const SEMBRA_STIPENDIO = /stipendi|emolument|retribuz|salari|cedolino|competenze/i;
 
 // ---------------------------------------------------------------------------
 // Email di avviso AMEX
