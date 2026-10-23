@@ -1008,7 +1008,7 @@ function renderMeseView(){
     const dataInserimentoBreve = (!t.ricorrenteGruppo && t.createdAt) ? new Date(t.createdAt).toLocaleDateString("it-IT", {day:"2-digit",month:"2-digit",year:"numeric"}) : null;
     return `<div class="tx-item ${isE?'entrata':'uscita'}" ${infoTitle?`title="${escapeHtml(infoTitle)}"`:''}>
       <div style="min-width:0">
-        <div class="tx-desc">${t.giorno?`<span style="color:${NAVY};font-weight:600">${String(t.giorno).padStart(2,'0')}</span> `:''}${t.ricorrenteGruppo?'&#128257; ':''}${escapeHtml(t.descrizione)}${t.allegatoId?` <a href="#" data-open-allegato="${t.allegatoId}" title="${escapeHtml(t.allegatoNome||'Allegato')}" style="text-decoration:none">&#128206;</a>`:''}</div>
+        <div class="tx-desc">${t.giorno?`<span style="color:${NAVY};font-weight:600">${String(t.giorno).padStart(2,'0')}</span> `:''}${t.ricorrenteGruppo?'&#128257; ':''}${escapeHtml(t.descrizione)}${t.allegatoId?` <a href="#" data-open-allegato="${t.allegatoId}" title="${escapeHtml(t.allegatoNome||'Allegato')}" style="text-decoration:none">&#128206;</a>`:''}${haCedolino(t)?` <a href="#" data-cedolino="${t.anno}-${t.mese}" title="Cedolino in Cassaforte" style="text-decoration:none">&#128196;</a>`:''}</div>
         <div class="tx-cat">${escapeHtml(t.categoria)}${t.amex?'<span class="amex-badge">AMEX · +1 MESE</span>':''}${etichettaStato(t)}${showDateBadge?' · '+MESI[t.mese-1].slice(0,3)+' '+t.anno:''}</div>
         ${t.ricorrenteGruppo ? `<div style="font-size:11px;color:#8A8072;margin-top:2px">Generata automaticamente</div>` : (dataInserimentoBreve ? `<div style="font-size:11px;color:#8A8072;margin-top:2px">Registrato il ${dataInserimentoBreve}</div>` : '')}
       </div>
@@ -2687,7 +2687,11 @@ async function apriAllegato(id){
   } catch(e) { alert("Errore nell'apertura dell'allegato: " + e.message); }
 }
 
+// Stipendi di Cosimo dal 2026, da quando i cedolini UNIPV arrivano in Cassaforte.
+function haCedolino(t){ return t.categoria==="Entrate" && t.anno>=2026 && String(t.voce||t.descrizione||"").startsWith("Stipendio Cosimo"); }
 document.addEventListener("click", (e) => {
+  const ced = e.target.closest("[data-cedolino]");
+  if (ced) { e.preventDefault(); const [anno, mese] = ced.dataset.cedolino.split("-").map(Number); Cassaforte.apriCedolino(anno, mese); return; }
   const link = e.target.closest("[data-open-allegato]");
   if (link) { e.preventDefault(); apriAllegato(link.dataset.openAllegato); }
 });

@@ -9,6 +9,8 @@
 // ============================================================
 const Cassaforte = (() => {
   const COL = "bilancio_familiare_cassaforte", DOC_CHIAVI = "_chiavi", COL_ALLEGATI = "bilancio_familiare_cassaforte_allegati";
+  // Cedolini scaricati dallo script (sync-apps-script), in chiaro finché la cassaforte non li cifra.
+  const COL_INBOX = "bilancio_familiare_cassaforte_inbox";
   const MAX_ALLEGATO = 10 * 1024 * 1024, PARTE_ALLEGATO = 512 * 1024;
   const TIPI_ALLEGATO = /^(application\/pdf|image\/(jpeg|png|webp|heic|heif|gif))$/;
   const ITER_PASSWORD = 600000, ITER_RECUPERO = 100000, MIN_PASSWORD = 12;
@@ -180,7 +182,10 @@ const Cassaforte = (() => {
   async function caricaAllegato(file, avanzamento){
     if (!TIPI_ALLEGATO.test(file.type)) throw new Error(`“${file.name}”: si possono allegare solo PDF e immagini.`);
     if (file.size > MAX_ALLEGATO) throw new Error(`“${file.name}” supera ${dimensioneLeggibile(MAX_ALLEGATO)}.`);
-    const id = crypto.randomUUID(), dati = new Uint8Array(await file.arrayBuffer());
+    return cifraAllegato(file.name, file.type, new Uint8Array(await file.arrayBuffer()), avanzamento);
+  }
+  async function cifraAllegato(nome, tipo, dati, avanzamento){
+    const id = crypto.randomUUID();
     const parti = Math.max(1, Math.ceil(dati.length / PARTE_ALLEGATO));
     for (let i = 0; i < parti; i++) {
       const docId = `${id}_${i}`, iv = casuali(12);
@@ -188,7 +193,7 @@ const Cassaforte = (() => {
       await colAllegati().doc(docId).set({ v: 1, iv: b64(iv), ct: b64(ct), aggiornato: Date.now() });
       avanzamento && avanzamento(i + 1, parti);
     }
-    return { id, nome: file.name, tipo: file.type, dimensione: dati.length, parti };
+    return { id, nome, tipo, dimensione: dati.length, parti };
   }
   async function leggiAllegato(a){
     const pezzi = [];
@@ -229,8 +234,60 @@ const Cassaforte = (() => {
       ridisegna();
     });
   }
+  // Dal movimento "Stipendio Cosimo" del bilancio: apre il cedolino del mese se la
+  // cassaforte è aperta, altrimenti lo propone appena la si sblocca.
+  let cedolinoRichiesto = null;
+  const nomeCedolino = (anno, mese) => `Cedolino ${anno}-${String(mese).padStart(2, "0")}.pdf`;
+  const trovaCedolino = (anno, mese) => {
+    const voce = [...voci.values()].find(v => v.raccolta === "cedolini-unipv-" + anno);
+    return voce && (voce.allegati || []).find(a => a.nome === nomeCedolino(anno, mese));
+  };
+  function apriCedolino(anno, mese){
+    const a = chiave && trovaCedolino(anno, mese);
+    if (a) return apriAllegato(a).catch(err => { alert(err.message); });
+    cedolinoRichiesto = { anno, mese };
+    state.tab = "cassaforte";
+    render();
+  }
+  function bannerCedolino(){
+    if (!cedolinoRichiesto) return "";
+    const { anno, mese } = cedolinoRichiesto, etichettaMese = `${MESI[mese - 1].toLowerCase()} ${anno}`;
+    if (trovaCedolino(anno, mese)) return `<p class="cf-ok">${pulsante("apriCedolinoRichiesto", `&#128196; Apri il cedolino di ${etichettaMese}`)}</p>`;
+    if (importazioneCedolini) return `<p class="sub">Cerco il cedolino di ${etichettaMese}…</p>`;
+    return `<p class="cf-errore">Il cedolino di ${etichettaMese} non è ancora in Cassaforte.</p>`;
+  }
+
+  // Una voce per anno ("Cedolini UNIPV 2026"), riconosciuta dal campo raccolta.
+  let importazioneCedolini = null;
+  function importaCedolini(){
+    if (importazioneCedolini || !chiave) return importazioneCedolini;
+    importazioneCedolini = (async () => {
+      const snap = await db.collection(COL_INBOX).get();
+      let importati = 0;
+      for (const d of snap.docs) {
+        if (!chiave) break;
+        const c = d.data(), raccolta = "cedolini-unipv-" + c.anno;
+        const allegato = await cifraAllegato(c.nome, "application/pdf", daB64(c.dati));
+        const voce = [...voci.values()].find(v => v.raccolta === raccolta);
+        const vid = voce ? voce.id : crypto.randomUUID();
+        const dati = voce ? { ...voce } : { tipo: "nota", titolo: `Cedolini UNIPV ${c.anno}`, raccolta, creato: Date.now(),
+          note: "Scaricati in automatico dal portale U-Web dell'Università di Pavia." };
+        delete dati.id;
+        dati.allegati = (dati.allegati || []).concat(allegato).sort((a, b) => String(a.nome).localeCompare(String(b.nome)));
+        dati.modificato = Date.now();
+        await col().doc(vid).set(await cifra(dati, vid));
+        voci.set(vid, { id: vid, ...dati });
+        // Solo ora, con il cedolino cifrato al sicuro, si cancella la copia in chiaro.
+        await db.collection(COL_INBOX).doc(d.id).delete();
+        importati++;
+      }
+      if (importati && !vista.bozza) { vista.messaggio = importati === 1 ? "1 cedolino nuovo aggiunto." : `${importati} cedolini nuovi aggiunti.`; ridisegna(); }
+    })().catch(err => { console.error("Importazione cedolini", err); }).finally(() => { importazioneCedolini = null; ridisegna(); });
+    return importazioneCedolini;
+  }
   function ascoltaVoci(){
     if (stopVoci) return;
+    let primaLettura = true;
     stopVoci = col().onSnapshot(snap => {
       const cambi = snap.docChanges().filter(c => c.doc.id !== DOC_CHIAVI);
       codaDecifra = codaDecifra.then(async () => {
@@ -241,6 +298,8 @@ const Cassaforte = (() => {
           catch (e) { voci.set(c.doc.id, { id: c.doc.id, illeggibile: true, titolo: "Voce illeggibile" }); }
         }
         ridisegna();
+        // Le voci servono già decifrate, per aggiungere i cedolini a quella dell'anno.
+        if (primaLettura) { primaLettura = false; importaCedolini(); }
       });
     }, e => { erroreCloud = "Lettura delle voci non riuscita: " + (e && e.message); ridisegna(); });
   }
@@ -416,6 +475,7 @@ const Cassaforte = (() => {
     }).join("");
     return `<div class="card cf">${intestazione(pulsante("nuova", "+ Nuova voce") + pulsante("impostazioni", "&#9881; Impostazioni") + pulsante("blocca", "&#128274; Blocca"))}
       ${avviso()}
+      ${bannerCedolino()}
       <input class="cf-cerca" data-cf-input="cerca" placeholder="Cerca…" value="${e(vista.cerca)}" autocomplete="off">
       ${righe || `<p class="sub">${voci.size ? "Nessuna voce corrisponde alla ricerca." : "Ancora nessuna voce. Aggiungi la prima con “+ Nuova voce”."}</p>`}
     </div>`;
@@ -572,6 +632,12 @@ const Cassaforte = (() => {
     if (!chiave) return;
     const id = el && el.dataset.id, campo = el && el.dataset.campo;
     if (nome === "blocca") return blocca();
+    if (nome === "apriCedolinoRichiesto") {
+      const a = cedolinoRichiesto && trovaCedolino(cedolinoRichiesto.anno, cedolinoRichiesto.mese);
+      cedolinoRichiesto = null;
+      if (a) apriAllegato(a).catch(err => { vista.errore = err.message; render(); });
+      return render();
+    }
     if (nome === "lista" || nome === "annulla") {
       if (vista.nuoviAllegati && vista.nuoviAllegati.length) eliminaAllegati(vista.nuoviAllegati).catch(() => {});
       const cerca = vista.cerca; vista = vistaIniziale(); vista.cerca = cerca; return render();
@@ -619,6 +685,7 @@ const Cassaforte = (() => {
       return conAttesa(async () => {
         const vid = b.id || crypto.randomUUID();
         const dati = { tipo: b.tipo, titolo: b.titolo.trim(), creato: b.creato || Date.now(), modificato: Date.now() };
+        if (b.raccolta) dati.raccolta = b.raccolta;
         (TIPI[b.tipo] || TIPI.nota).campi.forEach(c => { if (b[c]) dati[c] = String(b[c]); });
         if (b.allegati && b.allegati.length) dati.allegati = b.allegati;
         await col().doc(vid).set(await cifra(dati, vid));
@@ -734,5 +801,5 @@ const Cassaforte = (() => {
   document.addEventListener("input", aggiornaCampo);
   document.addEventListener("change", ev => { if (ev.target.matches && ev.target.matches("[data-cf-file]")) azione("caricaAllegati", ev.target); });
 
-  return { render: renderVista, blocca };
+  return { render: renderVista, blocca, apriCedolino };
 })();

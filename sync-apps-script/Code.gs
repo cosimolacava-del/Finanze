@@ -439,6 +439,180 @@ function hashBreve(s) {
 }
 
 // ---------------------------------------------------------------------------
+// Cedolini UNIPV (portale Cineca U-Web)
+// ---------------------------------------------------------------------------
+// Entra con le credenziali d'ateneo (UNIPV_USER / UNIPV_PASSWORD nelle proprietà
+// dello script), scarica i cedolini nuovi e li lascia in INBOX_CEDOLINI. Alla prima
+// apertura della Cassaforte l'app li cifra, li allega e cancella questa copia.
+
+const UNIPV = "https://unipv.u-web.cineca.it";
+const INBOX_CEDOLINI = "bilancio_familiare_cassaforte_inbox";
+const MAX_CEDOLINO = 740 * 1024; // in base64 cresce di 4/3 e un documento Firestore non supera 1 MB
+
+function scaricaCedolini() {
+  if (!prop("UNIPV_USER", "") || !prop("UNIPV_PASSWORD", "")) return;
+  const oggi = new Date();
+  // Il cedolino esce verso il 23: prima del 18 basta un controllo a settimana.
+  if (oggi.getDate() < 18 && oggi.getDay() !== 1 && prop("CEDOLINI_VISTI", "")) return;
+  const visti = JSON.parse(prop("CEDOLINI_VISTI", "[]"));
+  const token = loginUnipv();
+  const auth = { Authorization: "Bearer " + token };
+  const anni = [oggi.getFullYear()];
+  if (oggi.getMonth() === 0) anni.push(oggi.getFullYear() - 1); // a gennaio anche dicembre
+  let nuovi = 0;
+  anni.forEach(anno => {
+    const r = UrlFetchApp.fetch(UNIPV + "/appced/api/v4/documenti?anno=" + anno + "&tipoDocumento=", { headers: auth, muteHttpExceptions: true });
+    if (r.getResponseCode() !== 200) throw new Error("Elenco cedolini → " + r.getResponseCode());
+    JSON.parse(r.getContentText()).filter(d => d.tipoDocumento === "CEDOLINO" && visti.indexOf(d.id) < 0).forEach(d => {
+      // Stessa richiesta dell'app del portale (che codifica due volte idAllegato).
+      const url = UNIPV + "/appced/api/v4/documenti/" + encodeURIComponent(d.id) + "?format=pdf&type=" + encodeURIComponent(d.provenienzaDoc || "hrsuite") +
+        (String(d.provenienzaDoc || "").indexOf("hrsuite") >= 0 ? "&doc=" + encodeURIComponent(encodeURIComponent(d.idAllegato)) : "");
+      const pdf = UrlFetchApp.fetch(url, { headers: Object.assign({ Accept: "application/pdf; text/plain" }, auth), muteHttpExceptions: true });
+      const byte = pdf.getBlob().getBytes();
+      if (pdf.getResponseCode() !== 200 || String.fromCharCode.apply(null, byte.slice(0, 4).map(b => (b + 256) % 256)) !== "%PDF")
+        throw new Error("Cedolino " + d.anno + "-" + d.mese + " → " + pdf.getResponseCode() + ", non è un PDF");
+      if (byte.length > MAX_CEDOLINO) throw new Error("Cedolino " + d.anno + "-" + d.mese + " troppo grande (" + byte.length + " byte)");
+      const mese = Number(d.mese);
+      creaCedolinoInbox(hashBreve("cedolino|" + d.id), {
+        anno: Number(d.anno), mese: mese, descrizione: d.descrizione || d.descrDocumento || "",
+        nome: "Cedolino " + d.anno + "-" + String(mese).padStart(2, "0") + ".pdf",
+        pubblicato: d.dataPubblicazione || d.dtPubblicazione || "", dati: Utilities.base64Encode(byte), creato: Date.now()
+      });
+      visti.push(d.id);
+      setProp("CEDOLINI_VISTI", JSON.stringify(visti));
+      nuovi++;
+    });
+  });
+  setProp("ULTIMI_CEDOLINI", new Date().toISOString());
+  return nuovi;
+}
+
+function creaCedolinoInbox(id, v) {
+  const r = UrlFetchApp.fetch(fsUrl(INBOX_CEDOLINI + "?documentId=" + encodeURIComponent(id)), {
+    method: "post",
+    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+    contentType: "application/json",
+    payload: JSON.stringify(fsCampi(v)),
+    muteHttpExceptions: true
+  });
+  if (r.getResponseCode() !== 409 && r.getResponseCode() >= 300) throw new Error("Firestore → " + r.getResponseCode() + ": " + r.getContentText().slice(0, 300));
+}
+
+// Login SAML (Shibboleth) come farebbe il browser: segue i reindirizzamenti con i
+// cookie, compila il modulo di accesso e rimanda le risposte SAML, finché /loginShib
+// restituisce il token dell'app (valido circa 2 ore).
+function loginUnipv() {
+  const sessione = {};
+  let pagina = navigaUnipv(sessione, UNIPV + "/loginShib");
+  let credenzialiInviate = false, sceltaFatta = false;
+  for (let passo = 0; passo < 15; passo++) {
+    const tipo = String(intestazione(pagina.r.getHeaders(), "Content-Type") || "");
+    const testo = pagina.r.getContentText();
+    if (/json/.test(tipo)) {
+      const j = JSON.parse(testo);
+      if (j.token) return j.token;
+      throw new Error("Login UNIPV: risposta senza token");
+    }
+    const moduli = estraiModuli(testo, pagina.url);
+    let modulo = moduli.find(m => "j_username" in m.campi);
+    if (modulo) {
+      if (credenzialiInviate) throw new Error("Login UNIPV: credenziali rifiutate (controlla UNIPV_USER e UNIPV_PASSWORD)");
+      modulo.campi.j_username = prop("UNIPV_USER");
+      modulo.campi.j_password = prop("UNIPV_PASSWORD");
+      modulo.campi._eventId_proceed = "";
+      credenzialiInviate = true;
+    } else if (!sceltaFatta && (modulo = moduli.find(m => "_eventId_routing" in m.campi && "auth_ctx" in m.campi))) {
+      // Pagina di scelta UNIPV / SPID / CIE: come il pulsante UNIPV, triggerFlow('Password', '', 'internal').
+      modulo.campi.auth_ctx = "authn/Password";
+      modulo.campi.selected_flow = "internal";
+      modulo.campi.spid_idp = "";
+      sceltaFatta = true;
+    } else {
+      modulo = moduli.find(m => "SAMLResponse" in m.campi)
+        || moduli.find(m => Object.keys(m.campi).some(k => k.indexOf("shib_idp_ls") === 0))
+        || moduli.find(m => "_eventId_proceed" in m.campi);
+    }
+    if (!modulo) {
+      // Tornati sul portale dopo la risposta SAML: ora la sessione c'è.
+      if (pagina.url.indexOf(UNIPV) === 0 && pagina.url.indexOf("/loginShib") < 0) { pagina = navigaUnipv(sessione, UNIPV + "/loginShib"); continue; }
+      // Descrive la pagina (titolo, moduli e nomi dei campi) per capire cosa manca, senza valori.
+      const titolo = ((testo.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || "").trim();
+      const dettagli = moduli.map(m => m.metodo + " " + m.action.split("?")[0].replace(/^https?:\/\/[^\/]+/, "") + " [" + Object.keys(m.campi).join(",") + "]").join(" | ");
+      throw new Error("Login UNIPV: pagina inattesa " + pagina.url.split("?")[0] + " (" + pagina.r.getResponseCode() + ") «" + titolo + "» moduli: " + (dettagli || "nessuno") +
+        " testo: " + testo.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300));
+    }
+    pagina = navigaUnipv(sessione, modulo.action, { method: modulo.metodo, payload: modulo.campi });
+  }
+  throw new Error("Login UNIPV: troppi passaggi");
+}
+
+function navigaUnipv(sessione, url, opts) {
+  opts = opts || {};
+  let metodo = opts.method || "get", payload = opts.payload;
+  for (let i = 0; i < 12; i++) {
+    const host = url.match(/^https?:\/\/([^\/?#]+)/)[1];
+    const cookie = Object.keys(sessione).filter(d => host === d || host.endsWith("." + d))
+      .map(d => Object.keys(sessione[d]).map(n => n + "=" + sessione[d][n]).join("; ")).filter(Boolean).join("; ");
+    const r = UrlFetchApp.fetch(url, {
+      method: metodo, payload: metodo === "post" ? payload : undefined, followRedirects: false, muteHttpExceptions: true,
+      headers: Object.assign({ "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36" }, cookie ? { Cookie: cookie } : {})
+    });
+    const h = r.getAllHeaders();
+    [].concat(intestazione(h, "Set-Cookie") || []).forEach(c => {
+      const [coppia] = c.split(";"), eq = coppia.indexOf("=");
+      const dominio = ((c.match(/;\s*domain=\.?([^;]+)/i) || [])[1] || host).toLowerCase();
+      (sessione[dominio] = sessione[dominio] || {})[coppia.slice(0, eq).trim()] = coppia.slice(eq + 1).trim();
+    });
+    const codice = r.getResponseCode();
+    if ([301, 302, 303, 307, 308].indexOf(codice) < 0) return { r: r, url: url };
+    url = indirizzoAssoluto(intestazione(h, "Location"), url);
+    if (codice !== 307 && codice !== 308) { metodo = "get"; payload = undefined; }
+  }
+  throw new Error("Login UNIPV: troppi reindirizzamenti");
+}
+
+// Le intestazioni possono arrivare in minuscolo (HTTP/2).
+function intestazione(h, nome) {
+  const k = Object.keys(h).find(x => x.toLowerCase() === nome.toLowerCase());
+  return k ? h[k] : undefined;
+}
+
+function estraiModuli(html, base) {
+  const moduli = [];
+  const reModulo = /<form\b([^>]*)>([\s\S]*?)<\/form>/gi;
+  let m;
+  while ((m = reModulo.exec(html))) {
+    const attr = (s, n) => {
+      const x = s.match(new RegExp("\\s" + n + "\\s*=\\s*(\"([^\"]*)\"|'([^']*)'|([^\\s>]+))", "i"));
+      return x ? decodificaHtml(x[2] !== undefined ? x[2] : x[3] !== undefined ? x[3] : x[4]) : null;
+    };
+    const campi = {};
+    (m[2].match(/<(input|button)\b[^>]*>/gi) || []).forEach(t => {
+      const nome = attr(t, "name");
+      if (!nome) return;
+      const tipo = (attr(t, "type") || "").toLowerCase();
+      if ((tipo === "checkbox" || tipo === "radio") && !/\bchecked\b/i.test(t)) return;
+      campi[nome] = attr(t, "value") || "";
+    });
+    moduli.push({ action: indirizzoAssoluto(attr(m[1], "action") || base, base), metodo: (attr(m[1], "method") || "get").toLowerCase(), campi: campi });
+  }
+  return moduli;
+}
+
+function decodificaHtml(s) {
+  return s.replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
+    .replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
+function indirizzoAssoluto(u, base) {
+  if (/^https?:\/\//i.test(u)) return u;
+  const origine = base.match(/^https?:\/\/[^\/?#]+/)[0];
+  if (u.charAt(0) === "/") return origine + u;
+  return base.replace(/[?#].*$/, "").replace(/[^\/]*$/, "") + u;
+}
+
+// ---------------------------------------------------------------------------
 // Pianificazione e avvisi
 // ---------------------------------------------------------------------------
 
@@ -452,6 +626,7 @@ function installaPianificazione() {
   // Le email AMEX si attivano solo dopo aver verificato parseAvvisoAmex su email vere.
   if (prop("AMEX_ATTIVO", "") === "si") ScriptApp.newTrigger("sincronizzaAmexEmail").timeBased().everyHours(1).create();
   ScriptApp.newTrigger("controllaScadenzaConsenso").timeBased().everyDays(1).atHour(8).create();
+  ScriptApp.newTrigger("scaricaCedolini").timeBased().everyDays(1).atHour(9).create();
 }
 
 function controllaScadenzaConsenso() {
