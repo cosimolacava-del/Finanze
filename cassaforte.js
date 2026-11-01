@@ -12,7 +12,9 @@ const Cassaforte = (() => {
   // Cedolini scaricati dallo script (sync-apps-script), in chiaro finché la cassaforte non li cifra.
   const COL_INBOX = "bilancio_familiare_cassaforte_inbox";
   const MAX_ALLEGATO = 10 * 1024 * 1024, PARTE_ALLEGATO = 512 * 1024;
-  const TIPI_ALLEGATO = /^(application\/pdf|image\/(jpeg|png|webp|heic|heif|gif))$/;
+  const TIPI_ALLEGATO = /^(application\/(pdf|x-pkcs12|pkcs12|zip|msword|vnd\.openxmlformats-officedocument\.[a-z.]+|vnd\.oasis\.opendocument\.[a-z.]+)|image\/(jpeg|png|webp|heic|heif|gif))$/;
+  // Alcuni browser non danno il tipo di .pfx/.p12: lo si ricava dall'estensione.
+  const TIPI_PER_ESTENSIONE = { pfx: "application/x-pkcs12", p12: "application/x-pkcs12", heic: "image/heic" };
   const ITER_PASSWORD = 600000, ITER_RECUPERO = 100000, MIN_PASSWORD = 12;
   const BLOCCO_INATTIVITA = 5 * 60 * 1000, BLOCCO_NASCOSTA = 60 * 1000, PULIZIA_APPUNTI = 30 * 1000;
   const TIPI = {
@@ -180,9 +182,10 @@ const Cassaforte = (() => {
   const colAllegati = () => db.collection(COL_ALLEGATI);
   const dimensioneLeggibile = n => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1).replace(".0", "").replace(".", ",")} MB`;
   async function caricaAllegato(file, avanzamento){
-    if (!TIPI_ALLEGATO.test(file.type)) throw new Error(`“${file.name}”: si possono allegare solo PDF e immagini.`);
+    const tipo = file.type || TIPI_PER_ESTENSIONE[String(file.name).split(".").pop().toLowerCase()] || "";
+    if (!TIPI_ALLEGATO.test(tipo)) throw new Error(`“${file.name}”: si possono allegare PDF, immagini, documenti Office, archivi .zip e certificati .pfx/.p12.`);
     if (file.size > MAX_ALLEGATO) throw new Error(`“${file.name}” supera ${dimensioneLeggibile(MAX_ALLEGATO)}.`);
-    return cifraAllegato(file.name, file.type, new Uint8Array(await file.arrayBuffer()), avanzamento);
+    return cifraAllegato(file.name, tipo, new Uint8Array(await file.arrayBuffer()), avanzamento);
   }
   async function cifraAllegato(nome, tipo, dati, avanzamento){
     const id = crypto.randomUUID();
@@ -210,8 +213,9 @@ const Cassaforte = (() => {
     return Promise.all((elenco || []).flatMap(a => Array.from({ length: a.parti }, (_, i) => colAllegati().doc(`${a.id}_${i}`).delete())));
   }
   // La finestra si apre subito, al clic: aprirla dopo l'attesa la farebbe bloccare dal browser.
+  // PDF e immagini si aprono in una nuova scheda; gli altri file (.pfx, .docx…) si scaricano col loro nome.
   async function apriAllegato(a){
-    const finestra = window.open("", "_blank");
+    const finestra = /^(application\/pdf|image\/)/.test(a.tipo) ? window.open("", "_blank") : null;
     try {
       const url = URL.createObjectURL(await leggiAllegato(a));
       if (finestra) finestra.location.href = url;
@@ -257,32 +261,49 @@ const Cassaforte = (() => {
     return `<p class="cf-errore">Il cedolino di ${etichettaMese} non è ancora in Cassaforte.</p>`;
   }
 
-  // Una voce per anno ("Cedolini UNIPV 2026"), riconosciuta dal campo raccolta.
+  // Documenti in coda dallo script: cedolini UNIPV (una voce per anno, "Cedolini
+  // UNIPV 2026"), allegati delle email con etichetta "Cassaforte" (una voce per
+  // email) e file della cartella Dropbox (una voce per sottocartella). La voce
+  // giusta si riconosce dal campo raccolta; i file grandi arrivano in più pezzi.
   let importazioneCedolini = null;
   function importaCedolini(){
     if (importazioneCedolini || !chiave) return importazioneCedolini;
     importazioneCedolini = (async () => {
       const snap = await db.collection(COL_INBOX).get();
+      const pezzi = new Map();
+      snap.docs.filter(d => d.data().parteDi).forEach(d => {
+        const p = d.data();
+        if (!pezzi.has(p.parteDi)) pezzi.set(p.parteDi, []);
+        pezzi.get(p.parteDi).push({ id: d.id, indice: p.indice, dati: p.dati });
+      });
       let importati = 0;
-      for (const d of snap.docs) {
+      for (const d of snap.docs.filter(x => !x.data().parteDi)) {
         if (!chiave) break;
-        const c = d.data(), raccolta = "cedolini-unipv-" + c.anno;
-        const allegato = await cifraAllegato(c.nome, "application/pdf", daB64(c.dati));
+        const c = d.data(), suoi = (pezzi.get(d.id) || []).sort((a, b) => a.indice - b.indice);
+        let byte;
+        if (c.dati) byte = daB64(c.dati);
+        else if (suoi.length === c.parti) {
+          const parti = suoi.map(p => daB64(p.dati));
+          byte = new Uint8Array(parti.reduce((n, p) => n + p.length, 0));
+          parti.reduce((pos, p) => { byte.set(p, pos); return pos + p.length; }, 0);
+        } else continue; // pezzi non ancora tutti arrivati: alla prossima apertura
+        const raccolta = c.raccolta || "cedolini-unipv-" + c.anno;
+        const allegato = await cifraAllegato(c.nome, c.mime || "application/pdf", byte);
         const voce = [...voci.values()].find(v => v.raccolta === raccolta);
         const vid = voce ? voce.id : crypto.randomUUID();
-        const dati = voce ? { ...voce } : { tipo: "nota", titolo: `Cedolini UNIPV ${c.anno}`, raccolta, creato: Date.now(),
-          note: "Scaricati in automatico dal portale U-Web dell'Università di Pavia." };
+        const dati = voce ? { ...voce } : { tipo: c.tipoVoce || "nota", titolo: c.titolo || `Cedolini UNIPV ${c.anno}`, raccolta, creato: Date.now(),
+          note: c.note || "Scaricati in automatico dal portale U-Web dell'Università di Pavia." };
         delete dati.id;
         dati.allegati = (dati.allegati || []).concat(allegato).sort((a, b) => String(a.nome).localeCompare(String(b.nome)));
         dati.modificato = Date.now();
         await col().doc(vid).set(await cifra(dati, vid));
         voci.set(vid, { id: vid, ...dati });
-        // Solo ora, con il cedolino cifrato al sicuro, si cancella la copia in chiaro.
-        await db.collection(COL_INBOX).doc(d.id).delete();
+        // Solo ora, con il file cifrato al sicuro, si cancella la copia in chiaro.
+        await Promise.all([d.id, ...suoi.map(p => p.id)].map(id => db.collection(COL_INBOX).doc(id).delete()));
         importati++;
       }
-      if (importati && !vista.bozza) { vista.messaggio = importati === 1 ? "1 cedolino nuovo aggiunto." : `${importati} cedolini nuovi aggiunti.`; ridisegna(); }
-    })().catch(err => { console.error("Importazione cedolini", err); }).finally(() => { importazioneCedolini = null; ridisegna(); });
+      if (importati && !vista.bozza) { vista.messaggio = importati === 1 ? "1 documento nuovo aggiunto." : `${importati} documenti nuovi aggiunti.`; ridisegna(); }
+    })().catch(err => { console.error("Importazione documenti", err); }).finally(() => { importazioneCedolini = null; ridisegna(); });
     return importazioneCedolini;
   }
   function ascoltaVoci(){
@@ -502,8 +523,8 @@ const Cassaforte = (() => {
       <h4 style="margin:6px 0">&#128206; Allegati</h4>
       ${(b.allegati || []).map(a => `<div class="cf-riga"><span class="cf-valore" style="font-family:inherit">${e(a.nome)} <span class="sub">${dimensioneLeggibile(a.dimensione)}</span></span>
         ${pulsante("apriAllegato", "Apri", `data-allegato="${e(a.id)}"`)}${pulsante("rimuoviAllegato", "Rimuovi", `data-allegato="${e(a.id)}"`)}</div>`).join("")}
-      <label class="range-btn" style="display:inline-block;margin:6px 0 12px;cursor:pointer">+ Aggiungi PDF o foto
-        <input type="file" data-cf-file accept="application/pdf,image/*" multiple style="display:none" ${vista.attesa ? "disabled" : ""}></label>
+      <label class="range-btn" style="display:inline-block;margin:6px 0 12px;cursor:pointer">+ Aggiungi file
+        <input type="file" data-cf-file accept="application/pdf,image/*,.pfx,.p12,.zip,.doc,.docx,.xlsx,.odt" multiple style="display:none" ${vista.attesa ? "disabled" : ""}></label>
       <span class="sub">fino a ${dimensioneLeggibile(MAX_ALLEGATO)} ciascuno, cifrati come il resto</span>
       <p class="sub" id="cfAvanzamento" style="margin:4px 0"></p>
       ${avviso()}

@@ -72,7 +72,10 @@ function eb(method, path, body) {
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
+  if (p.code && String(p.state || "").indexOf("dropbox-") === 0) return completaDropbox(p);
   if (p.code) return completaConsenso(p);
+  if (p.dropbox) return HtmlService.createHtmlOutput(
+    '<p style="font-family:system-ui;margin:40px auto;max-width:520px"><a href="' + avviaDropbox() + '" target="_top">Prosegui su Dropbox per autorizzare</a></p>');
   if (p.sync) return paginaStato(esitoSincronizzazione(sincronizzaBper()));
   // La pagina dello script gira in un iframe: la banca va aperta nella finestra
   // principale (target _top), altrimenti molte banche rifiutano di caricarsi.
@@ -124,6 +127,7 @@ function paginaStato(msg) {
     "<p>Consenso valido fino a: <b>" + (scad ? new Date(scad).toLocaleDateString("it-IT") : "non collegato") + "</b></p>" +
     '<p><a href="' + url + '?sync=1" target="_top">Aggiorna saldo e movimenti ora</a> · ' +
     '<a href="' + url + '?avvia=1" target="_top">Collega / rinnova BPER</a> · ' +
+    (prop("DROPBOX_APP_KEY", "") ? '<a href="' + url + '?dropbox=1" target="_top">Collega Dropbox</a> · ' : "") +
     '<a href="' + APP_URL + '" target="_top">Torna all\'app</a></p></div>'
   );
 }
@@ -253,10 +257,10 @@ function inboxDaBper(acc, t, imp) {
   const ref = t.entry_reference || t.transaction_id || [t.booking_date, importo, descr].join("|");
   const id = "bper_" + hashBreve(acc + "|" + ref);
   const base = { fonte: "bper", importo: importo, entrata: entrata, descrizione: descr.replace(/\s+/g, " ").slice(0, 200), amex: false };
-  // Addebito trimestrale del mutuo (su BPER "RATA FINANZIAMENTO"): l'app lo divide
-  // da sola in tre rate mensili. Vale anche se precede la data di partenza, perché
-  // copre i mesi successivi.
-  if (!entrata && /\b(mutuo|rata finanziamento)\b/i.test(descr)) {
+  // Addebito trimestrale del mutuo (su BPER "RATA PRESTITO FIN", a volte "RATA
+  // FINANZIAMENTO"): l'app lo divide da sola in tre rate mensili. Vale anche se
+  // precede la data di partenza, perché copre i mesi successivi.
+  if (!entrata && /\b(mutuo|rata finanziamento|rata prestito)\b/i.test(descr)) {
     ricordaAddebito("ULTIMO_ADDEBITO_MUTUO", t.booking_date);
     return creaInbox(id, Object.assign({}, base, { data: t.booking_date, tipo: "rata_trimestrale" }));
   }
@@ -498,6 +502,133 @@ function creaCedolinoInbox(id, v) {
   if (r.getResponseCode() !== 409 && r.getResponseCode() >= 300) throw new Error("Firestore → " + r.getResponseCode() + ": " + r.getContentText().slice(0, 300));
 }
 
+// ---------------------------------------------------------------------------
+// Documenti per la Cassaforte: email con etichetta "Cassaforte" e cartella Dropbox
+// ---------------------------------------------------------------------------
+// Ogni file finisce in INBOX_CEDOLINI come documento principale (metadati) più i
+// pezzi da PARTE_INBOX byte ("<id>__0", "<id>__1", …): un documento Firestore non
+// supera 1 MB. Alla prima apertura della Cassaforte l'app li cifra e li cancella.
+
+const PARTE_INBOX = 700 * 1024;
+const MAX_FILE_INBOX = 20 * 1024 * 1024;
+const ETICHETTA_CASSAFORTE = "Cassaforte", ETICHETTA_IMPORTATA = "Cassaforte/Importata";
+const TIPI_FILE_CASSAFORTE = /^(application\/(pdf|x-pkcs12|pkcs12|zip|msword|vnd\.openxmlformats-officedocument\.[a-z.]+|vnd\.oasis\.opendocument\.[a-z.]+)|image\/(jpeg|png|webp|heic|heif|gif))$/;
+const TIPI_PER_ESTENSIONE = { pdf: "application/pdf", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", heic: "image/heic", webp: "image/webp",
+  pfx: "application/x-pkcs12", p12: "application/x-pkcs12", zip: "application/zip", doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  odt: "application/vnd.oasis.opendocument.text" };
+const tipoDaNome = nome => TIPI_PER_ESTENSIONE[(String(nome).split(".").pop() || "").toLowerCase()] || "";
+
+function scriviFileInbox(id, meta, byte) {
+  const parti = Math.max(1, Math.ceil(byte.length / PARTE_INBOX));
+  for (let i = 0; i < parti; i++) {
+    creaCedolinoInbox(id + "__" + i, { parteDi: id, indice: i, dati: Utilities.base64Encode(byte.slice(i * PARTE_INBOX, (i + 1) * PARTE_INBOX)) });
+  }
+  // Il documento principale per ultimo: l'app lo considera solo quando i pezzi ci sono già.
+  creaCedolinoInbox(id, Object.assign({}, meta, { parti: parti, dimensione: byte.length, creato: Date.now() }));
+}
+
+// Email a cui hai messo l'etichetta "Cassaforte": gli allegati diventano una voce
+// della Cassaforte (una per email). Poi l'etichetta passa a "Cassaforte/Importata".
+function importaDaGmail() {
+  const importata = GmailApp.getUserLabelByName(ETICHETTA_IMPORTATA) || GmailApp.createLabel(ETICHETTA_IMPORTATA);
+  const etichetta = GmailApp.getUserLabelByName(ETICHETTA_CASSAFORTE);
+  if (!etichetta) { GmailApp.createLabel(ETICHETTA_CASSAFORTE); return 0; }
+  let file = 0;
+  etichetta.getThreads(0, 20).forEach(thread => {
+    thread.getMessages().forEach(m => {
+      const voce = { raccolta: "gmail-" + m.getId(), titolo: (m.getSubject() || "Email senza oggetto").slice(0, 120), tipoVoce: "nota",
+        note: "Da " + m.getFrom() + ", " + Utilities.formatDate(m.getDate(), "Europe/Rome", "dd/MM/yyyy") + "." };
+      m.getAttachments({ includeInlineImages: false }).forEach((a, n) => {
+        const tipo = a.getContentType() || tipoDaNome(a.getName());
+        if (!TIPI_FILE_CASSAFORTE.test(tipo) && !tipoDaNome(a.getName())) return;
+        const byte = a.getBytes();
+        if (byte.length > MAX_FILE_INBOX) return;
+        scriviFileInbox(hashBreve("gmail|" + m.getId() + "|" + n), Object.assign({ nome: a.getName(), mime: tipo || tipoDaNome(a.getName()) }, voce), byte);
+        file++;
+      });
+    });
+    thread.removeLabel(etichetta);
+    thread.addLabel(importata);
+  });
+  return file;
+}
+
+// Dropbox: l'app Dropbox ha accesso solo alla sua cartella (/Apps/<nome app>).
+// Ogni file messo lì viene messo in coda per la Cassaforte e poi cancellato da
+// Dropbox (resta nei file eliminati di Dropbox per 30 giorni). Le sottocartelle
+// diventano il titolo della voce: /Passaporti/x.pdf → voce "Passaporti".
+function dropboxToken() {
+  const r = UrlFetchApp.fetch("https://api.dropboxapi.com/oauth2/token", {
+    method: "post", muteHttpExceptions: true,
+    payload: { grant_type: "refresh_token", refresh_token: prop("DROPBOX_REFRESH_TOKEN"), client_id: prop("DROPBOX_APP_KEY"), client_secret: prop("DROPBOX_APP_SECRET") }
+  });
+  if (r.getResponseCode() !== 200) throw new Error("Dropbox token → " + r.getResponseCode() + ": " + r.getContentText().slice(0, 200));
+  return JSON.parse(r.getContentText()).access_token;
+}
+
+function dropboxApi(token, percorso, corpo) {
+  const r = UrlFetchApp.fetch("https://api.dropboxapi.com/2/" + percorso, {
+    method: "post", contentType: "application/json", headers: { Authorization: "Bearer " + token },
+    payload: JSON.stringify(corpo), muteHttpExceptions: true
+  });
+  if (r.getResponseCode() !== 200) throw new Error("Dropbox " + percorso + " → " + r.getResponseCode() + ": " + r.getContentText().slice(0, 200));
+  return JSON.parse(r.getContentText());
+}
+
+function importaDaDropbox() {
+  if (!prop("DROPBOX_REFRESH_TOKEN", "")) return 0;
+  const token = dropboxToken();
+  let elenco = dropboxApi(token, "files/list_folder", { path: "", recursive: true }), voci = elenco.entries;
+  while (elenco.has_more) { elenco = dropboxApi(token, "files/list_folder/continue", { cursor: elenco.cursor }); voci = voci.concat(elenco.entries); }
+  let file = 0;
+  voci.filter(v => v[".tag"] === "file" && v.size <= MAX_FILE_INBOX).forEach(v => {
+    const tipo = tipoDaNome(v.name);
+    if (!tipo) return;
+    const r = UrlFetchApp.fetch("https://content.dropboxapi.com/2/files/download", {
+      method: "post", headers: { Authorization: "Bearer " + token, "Dropbox-API-Arg": JSON.stringify({ path: v.id }) }, muteHttpExceptions: true
+    });
+    if (r.getResponseCode() !== 200) throw new Error("Dropbox download " + v.name + " → " + r.getResponseCode());
+    const cartella = v.path_display.split("/").slice(1, -1).join(" / ");
+    scriviFileInbox(hashBreve("dropbox|" + v.id + "|" + v.rev), {
+      nome: v.name, mime: tipo, raccolta: "dropbox-" + (cartella || "documenti").toLowerCase(), titolo: cartella || "Documenti da Dropbox",
+      tipoVoce: "documento", note: "Importati dalla cartella Dropbox collegata alla Cassaforte."
+    }, r.getBlob().getBytes());
+    // Solo dopo che è in coda: il file non serve più su Dropbox.
+    dropboxApi(token, "files/delete_v2", { path: v.id });
+    file++;
+  });
+  return file;
+}
+
+// Collegamento a Dropbox, dalla pagina dello script (?dropbox=1): Dropbox chiede
+// il consenso e torna qui con un codice, che diventa un refresh token permanente.
+function avviaDropbox() {
+  const state = "dropbox-" + Utilities.getUuid();
+  setProp("DROPBOX_PENDING_STATE", state);
+  return "https://www.dropbox.com/oauth2/authorize?response_type=code&token_access_type=offline&client_id=" + encodeURIComponent(prop("DROPBOX_APP_KEY")) +
+    "&redirect_uri=" + encodeURIComponent(prop("WEB_APP_URL")) + "&state=" + encodeURIComponent(state);
+}
+
+function completaDropbox(p) {
+  if (p.state !== prop("DROPBOX_PENDING_STATE", "")) return paginaStato("Richiesta Dropbox non riconosciuta: riparti da \"Collega Dropbox\".");
+  const r = UrlFetchApp.fetch("https://api.dropboxapi.com/oauth2/token", {
+    method: "post", muteHttpExceptions: true,
+    payload: { grant_type: "authorization_code", code: p.code, redirect_uri: prop("WEB_APP_URL"), client_id: prop("DROPBOX_APP_KEY"), client_secret: prop("DROPBOX_APP_SECRET") }
+  });
+  if (r.getResponseCode() !== 200) return paginaStato("Collegamento Dropbox non riuscito: " + r.getContentText().slice(0, 200));
+  setProp("DROPBOX_REFRESH_TOKEN", JSON.parse(r.getContentText()).refresh_token);
+  PropertiesService.getScriptProperties().deleteProperty("DROPBOX_PENDING_STATE");
+  return paginaStato("Dropbox collegato: i file nella cartella dell'app arriveranno nella Cassaforte.");
+}
+
+// Avvio automatico: email etichettate e cartella Dropbox.
+function importaPerCassaforte() {
+  const gmail = importaDaGmail(), dropbox = importaDaDropbox();
+  setProp("ULTIMA_IMPORTAZIONE_CASSAFORTE", new Date().toISOString() + " gmail=" + gmail + " dropbox=" + dropbox);
+  return { gmail: gmail, dropbox: dropbox };
+}
+
 // Login SAML (Shibboleth) come farebbe il browser: segue i reindirizzamenti con i
 // cookie, compila il modulo di accesso e rimanda le risposte SAML, finché /loginShib
 // restituisce il token dell'app (valido circa 2 ore).
@@ -627,6 +758,7 @@ function installaPianificazione() {
   if (prop("AMEX_ATTIVO", "") === "si") ScriptApp.newTrigger("sincronizzaAmexEmail").timeBased().everyHours(1).create();
   ScriptApp.newTrigger("controllaScadenzaConsenso").timeBased().everyDays(1).atHour(8).create();
   ScriptApp.newTrigger("scaricaCedolini").timeBased().everyDays(1).atHour(9).create();
+  ScriptApp.newTrigger("importaPerCassaforte").timeBased().everyHours(1).create();
 }
 
 function controllaScadenzaConsenso() {

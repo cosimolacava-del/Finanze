@@ -68,6 +68,23 @@ Il consenso dura al massimo circa 6 mesi, come prevede la PSD2. Due settimane pr
    - Le email riconosciute ricevono l'etichetta Gmail `finanze-importata`.
    - Quelle non riconosciute ricevono `finanze-da-controllare`: se ne vedi, il riconoscimento va sistemato.
 
+## 5. Documenti per la Cassaforte (Gmail e Dropbox)
+
+Ogni ora `importaPerCassaforte` mette in coda per la Cassaforte:
+
+- **Gmail**: gli allegati delle email con l'etichetta **Cassaforte**, una voce per email. Dopo l'importazione l'etichetta diventa **Cassaforte/Importata**; l'email resta dov'è.
+- **Dropbox**: i file nella cartella dell'app Dropbox. Ogni sottocartella diventa una voce, ad esempio `Passaporti/` diventa la voce "Passaporti". Dopo l'importazione il file viene cancellato da Dropbox (resta nei file eliminati per 30 giorni).
+
+I file restano non cifrati su Firestore solo fino alla prima apertura della Cassaforte: in quel momento l'app li cifra e cancella la copia.
+
+Per collegare Dropbox:
+
+1. Su <https://www.dropbox.com/developers/apps> crea un'app: **Scoped access**, **App folder**, con un nome a piacere (la cartella sarà `/Apps/<nome>`).
+2. In **Permissions** attiva `files.metadata.read`, `files.content.read` e `files.content.write`, poi premi **Submit**.
+3. In **Settings**, alla voce **Redirect URIs**, aggiungi l'URL `/exec` dello script (lo stesso di `WEB_APP_URL`).
+4. Nelle proprietà dello script aggiungi `DROPBOX_APP_KEY` e `DROPBOX_APP_SECRET` (dalla pagina Settings dell'app).
+5. Apri la pagina dello script e clicca **Collega Dropbox**.
+
 ## Cosa resta da verificare
 
 - Il testo delle email AMEX Italia, per completare `parseAvvisoAmex`.
