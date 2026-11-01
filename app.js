@@ -2773,6 +2773,11 @@ function attachHandlers(){
             }
           }
           state.pendingDeleteId = null;
+          // Stima dello stipendio tolta a mano: per quel mese non la si rimette.
+          if (t && t.automatico==="stima_stipendio") {
+            state.stipendi.stimeEscluse = (state.stipendi.stimeEscluse || []).concat(chiaveStima(t.voce, t.anno, t.mese));
+            saveStipendi();
+          }
           if (t) {
             state.cestino.unshift({...t, deletedAt:Date.now()});
             pulisciCestinoScaduto();
@@ -4413,16 +4418,43 @@ function elaboraRataTrimestrale(it){
 // già stata contata così nei 12 mesi: va stornata, mai sommata di nuovo.
 function mensilitaDiRiferimento(voce, anno, mese){
   const k = anno*12+mese;
-  const precedenti = state.transazioni.filter(t => t.categoria==="Entrate" && corrispondeTesto(t, voce) && t.anno*12+t.mese < k)
+  const precedenti = state.transazioni.filter(t => t.categoria==="Entrate" && t.automatico!=="stima_stipendio" && corrispondeTesto(t, voce) && t.anno*12+t.mese < k)
     .sort((a,b)=>(b.anno*12+b.mese)-(a.anno*12+a.mese));
   const auto = precedenti.find(t => t.automatico==="stipendio" && t.accreditoBanca);
   if (auto) return Number(auto.accreditoBanca);
   // Prima volta: dai movimenti precedenti, già comprensivi di tredicesima (× 12/13).
   return precedenti.length ? Number(precedenti[0].importo)*12/13 : null;
 }
+// Stipendio stimato: a inizio mese, finché l'accredito non arriva, si mette lo
+// stipendio del mese prima, così il risparmio del mese non risulta sottostimato.
+// L'accredito vero lo sostituisce; se lo cancelli a mano non torna più per quel mese.
+const VOCI_STIPENDIO_STIMATO = ["Stipendio Cosimo", "Stipendio Chiara"];
+const chiaveStima = (voce, anno, mese) => `${voce}|${anno}-${mese}`;
+function stimaStipendi(){
+  if (!movimentiPronti || !cloudReady) return;
+  const oggi = new Date(), anno = oggi.getFullYear(), mese = oggi.getMonth()+1;
+  const escluse = (state.stipendi && state.stipendi.stimeEscluse) || [];
+  VOCI_STIPENDIO_STIMATO.forEach(voce => {
+    const delMese = state.transazioni.filter(t => t.categoria==="Entrate" && t.anno===anno && t.mese===mese && corrispondeTesto(t, voce));
+    const stime = delMese.filter(t => t.automatico==="stima_stipendio");
+    // Arrivato lo stipendio vero (dalla banca o a mano): la stima non serve più.
+    if (delMese.length > stime.length) { stime.forEach(t => cancellaMovimento(t.id)); return; }
+    if (stime.length || escluse.includes(chiaveStima(voce, anno, mese))) return;
+    if (inboxItems.some(it => it.tipo==="stipendio" && it.voce===voce && it.stato==="da_confermare")) return;
+    const ultimo = state.transazioni.filter(t => t.categoria==="Entrate" && t.automatico!=="stima_stipendio" && corrispondeTesto(t, voce) && t.anno*12+t.mese < anno*12+mese)
+      .sort((a,b)=>(b.anno*12+b.mese)-(a.anno*12+a.mese))[0];
+    if (!ultimo) return;
+    const importo = Number(ultimo.importo);
+    salvaMovimento({id:`stima-${voce.toLowerCase().replace(/\W+/g, "-")}-${anno}-${mese}`, anno, mese, giorno: ultimo.giorno || 23, categoria:"Entrate",
+      descrizione:`${voce} (stimato sull'ultimo stipendio, ${eur(importo)}: si corregge quando arriva l'accredito)`, importo,
+      amex:false, automatico:"stima_stipendio", voce, createdAt:Date.now(), updatedAt:Date.now()});
+  });
+}
 function elaboraStipendio(it){
   const voce = it.voce, [anno, mese, giorno] = String(it.data).split("-").map(Number);
   const accredito = Number(it.importo);
+  // La stima del mese lascia il posto all'accredito vero.
+  state.transazioni.filter(t => t.automatico==="stima_stipendio" && t.voce===voce && t.anno===anno && t.mese===mese).forEach(t => cancellaMovimento(t.id));
   // Già inserito a mano: resta in "Da confermare" con l'avviso doppione.
   if (inseritoAMano(voce, true, anno, mese)) return;
   const giaAutomatico = state.transazioni.find(t => t.automatico==="stipendio" && t.voce===voce && t.anno===anno && t.mese===mese);
@@ -4485,6 +4517,7 @@ function elaboraMovimentiAutomatici(){
         else if (it.tipo==="entrata_fissa" && it.voce) elaboraEntrataFissa(it);
       } catch(e) { console.error("Inserimento automatico non riuscito", it.id, e); }
     });
+  stimaStipendi();
 }
 function bindInbox(){
   document.querySelectorAll("[data-amex-ok]").forEach(b => b.onclick = () => aggiornaInbox(b.dataset.amexOk, {stato:"confermato"}));
