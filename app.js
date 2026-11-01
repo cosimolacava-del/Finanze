@@ -2688,7 +2688,7 @@ async function apriAllegato(id){
 }
 
 // Stipendi di Cosimo dal 2026, da quando i cedolini UNIPV arrivano in Cassaforte.
-function haCedolino(t){ return t.categoria==="Entrate" && t.anno>=2026 && String(t.voce||t.descrizione||"").startsWith("Stipendio Cosimo"); }
+function haCedolino(t){ return t.categoria==="Entrate" && t.anno>=2026 && t.automatico!=="stima_stipendio" && String(t.voce||t.descrizione||"").startsWith("Stipendio Cosimo"); }
 document.addEventListener("click", (e) => {
   const ced = e.target.closest("[data-cedolino]");
   if (ced) { e.preventDefault(); const [anno, mese] = ced.dataset.cedolino.split("-").map(Number); Cassaforte.apriCedolino(anno, mese); return; }
