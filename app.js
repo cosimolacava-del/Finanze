@@ -4373,8 +4373,11 @@ function inseritoAMano(testo, entrata, anno, mese){
 function chiudiRicorrenzeDa(testo, entrata, anno, mese){
   const k0 = anno*12+mese, prima = shiftMonth(anno, mese, -1);
   const regole = (state.ricorrenti||[]).filter(r => (r.categoria==="Entrate")===entrata && corrispondeTesto(r, testo));
-  if (!regole.length) return;
+  // Anche le rate generate in anticipo da ricorrenze che non esistono più: senza
+  // regola nessuno le toglierebbe e resterebbero doppioni dei movimenti della banca.
   const gruppi = new Set(regole.map(r => r.gruppoId));
+  state.transazioni.forEach(t => { if (t.ricorrenteGruppo && (t.categoria==="Entrate")===entrata && corrispondeTesto(t, testo)) gruppi.add(t.ricorrenteGruppo); });
+  if (!gruppi.size) return;
   state.ricorrenti = state.ricorrenti.filter(r => !(regole.includes(r) && r.dalAnno*12+r.dalMese >= k0));
   state.ricorrenti.forEach(r => {
     if (regole.includes(r) && (!r.alAnno || r.alAnno*12+r.alMese >= k0)) { r.alAnno = prima.anno; r.alMese = prima.mese; }
