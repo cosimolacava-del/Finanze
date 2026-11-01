@@ -4430,6 +4430,8 @@ function mensilitaDiRiferimento(voce, anno, mese){
 // L'accredito vero lo sostituisce; se lo cancelli a mano non torna più per quel mese.
 const VOCI_STIPENDIO_STIMATO = ["Stipendio Cosimo", "Stipendio Chiara"];
 const chiaveStima = (voce, anno, mese) => `${voce}|${anno}-${mese}`;
+// "Stimato" all'inizio: su telefono la descrizione viene tagliata in fondo.
+const descrizioneStima = (voce, importo) => `STIMATO · ${voce} (${eur(importo)} come l'ultimo stipendio, si corregge quando arriva l'accredito)`;
 function stimaStipendi(){
   if (!movimentiPronti || !cloudReady) return;
   const oggi = new Date(), anno = oggi.getFullYear(), mese = oggi.getMonth()+1;
@@ -4439,6 +4441,8 @@ function stimaStipendi(){
     const stime = delMese.filter(t => t.automatico==="stima_stipendio");
     // Arrivato lo stipendio vero (dalla banca o a mano): la stima non serve più.
     if (delMese.length > stime.length) { stime.forEach(t => cancellaMovimento(t.id)); return; }
+    // Stime create con la descrizione precedente: la si aggiorna.
+    stime.filter(t => t.descrizione !== descrizioneStima(voce, t.importo)).forEach(t => salvaMovimento({...t, descrizione: descrizioneStima(voce, t.importo), updatedAt: Date.now()}));
     if (stime.length || escluse.includes(chiaveStima(voce, anno, mese))) return;
     if (inboxItems.some(it => it.tipo==="stipendio" && it.voce===voce && it.stato==="da_confermare")) return;
     const ultimo = state.transazioni.filter(t => t.categoria==="Entrate" && t.automatico!=="stima_stipendio" && corrispondeTesto(t, voce) && t.anno*12+t.mese < anno*12+mese)
@@ -4446,7 +4450,7 @@ function stimaStipendi(){
     if (!ultimo) return;
     const importo = Number(ultimo.importo);
     salvaMovimento({id:`stima-${voce.toLowerCase().replace(/\W+/g, "-")}-${anno}-${mese}`, anno, mese, giorno: ultimo.giorno || 23, categoria:"Entrate",
-      descrizione:`${voce} (stimato sull'ultimo stipendio, ${eur(importo)}: si corregge quando arriva l'accredito)`, importo,
+      descrizione: descrizioneStima(voce, importo), importo,
       amex:false, automatico:"stima_stipendio", voce, createdAt:Date.now(), updatedAt:Date.now()});
   });
 }
