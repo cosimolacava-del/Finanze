@@ -283,14 +283,14 @@ function inboxDaBper(acc, t, imp) {
     if (imp.dal && data < imp.dal) return false;
     return creaInbox(id, Object.assign({}, base, { data: data, tipo: "entrata_fissa", voce: fissa.voce }));
   }
-  const stipendio = entrata && REGOLE_STIPENDIO.find(r => r.re.test(descr));
+  const stipendio = entrata && !NON_STIPENDIO.test(descr) && REGOLE_STIPENDIO.find(r => r.re.test(descr));
   if (stipendio) {
     if (imp.dal && data < imp.dal) return false;
     return creaInbox(id, Object.assign({}, base, { data: data, tipo: "stipendio", voce: stipendio.voce }));
   }
   // Un accredito che sembra uno stipendio ma non corrisponde a nessuna regola non
   // va perso tra le parole escluse: lo si mostra in "Da confermare".
-  if (entrata && SEMBRA_STIPENDIO.test(descr)) {
+  if (entrata && !NON_STIPENDIO.test(descr) && SEMBRA_STIPENDIO.test(descr)) {
     if (imp.dal && data < imp.dal) return false;
     return creaInbox(id, Object.assign({}, base, { data: data, tipo: "stipendio_da_assegnare" }));
   }
@@ -311,6 +311,9 @@ const REGOLE_ENTRATA_FISSA = [
   { re: /assegno unico|\ba\.?u\.?u\.?\b/i, voce: "Assegno unico" }
 ];
 const SEMBRA_STIPENDIO = /stipendi|emolument|retribuz|salari|cedolino|competenze/i;
+// Anche il Comune paga i compensi da consigliere come "EMOLUMENTI": non sono uno
+// stipendio, restano un'entrata normale da confermare.
+const NON_STIPENDIO = /comune di pavia/i;
 
 // ---------------------------------------------------------------------------
 // Email di avviso AMEX
