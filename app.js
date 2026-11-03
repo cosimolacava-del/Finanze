@@ -906,7 +906,6 @@ function render(){
   else if (state.tab === "andamento") content.innerHTML = renderAndamentoView();
   else if (state.tab === "budget") content.innerHTML = renderBudgetView();
   else if (state.tab === "saldo") content.innerHTML = renderSaldoView();
-  else if (state.tab === "ricorrenti") content.innerHTML = renderRicorrentiView();
   else if (state.tab === "stipendi") content.innerHTML = renderStipendiView();
   else if (state.tab === "admin") content.innerHTML = renderAdminView();
   else if (state.tab === "cassaforte") content.innerHTML = Cassaforte.render();
@@ -932,14 +931,13 @@ function renderTabs(){
     {id:"andamento", label:"&#8599; Andamento"},
     {id:"budget", label:"&#128203; Budget"},
     {id:"saldo", label:"&#127974; Saldo"},
-    {id:"ricorrenti", label:"\u{1F501} Ricorrenti"},
     {id:"stipendi", label:"\u{1F4B6} Stipendi"},
     {id:"cassaforte", label:"\u{1F512} Cassaforte"},
     {id:"admin", label:"\u2699 Admin"}
   ];
   document.getElementById("tabs").innerHTML = tabs.map(t =>
     '<button class="tab-btn '+(state.tab===t.id?'active ':'')+(t.id==='admin'?'admin-tab':'')+'" data-tab="'+t.id+'">'+t.label+'</button>'
-  ).join("")+'<button class="mobile-more" id="mobileMoreBtn">&#9776; Altro</button><div class="mobile-more-menu" id="mobileMoreMenu"><button data-mobile-tab="ricorrenti">&#128257; Ricorrenti</button><button data-mobile-tab="stipendi">&#128176; Stipendi</button><button data-mobile-tab="cassaforte">&#128274; Cassaforte</button><button data-mobile-tab="admin">&#9881; Admin</button></div>';
+  ).join("")+'<button class="mobile-more" id="mobileMoreBtn">&#9776; Altro</button><div class="mobile-more-menu" id="mobileMoreMenu"><button data-mobile-tab="stipendi">&#128176; Stipendi</button><button data-mobile-tab="cassaforte">&#128274; Cassaforte</button><button data-mobile-tab="admin">&#9881; Admin</button></div>';
 }
 
 function currentTx(){
@@ -1008,14 +1006,13 @@ function renderMeseView(){
     const dataInserimentoBreve = (!t.ricorrenteGruppo && t.createdAt) ? new Date(t.createdAt).toLocaleDateString("it-IT", {day:"2-digit",month:"2-digit",year:"numeric"}) : null;
     return `<div class="tx-item ${isE?'entrata':'uscita'}" ${infoTitle?`title="${escapeHtml(infoTitle)}"`:''}>
       <div style="min-width:0">
-        <div class="tx-desc">${t.giorno?`<span style="color:${NAVY};font-weight:600">${String(t.giorno).padStart(2,'0')}</span> `:''}${t.ricorrenteGruppo?'&#128257; ':''}${haCedolino(t)?`<a href="#" data-cedolino="${t.anno}-${t.mese}" title="Cedolino in Cassaforte" style="text-decoration:none">&#128196;</a> `:''}${escapeHtml(t.descrizione)}${t.allegatoId?` <a href="#" data-open-allegato="${t.allegatoId}" title="${escapeHtml(t.allegatoNome||'Allegato')}" style="text-decoration:none">&#128206;</a>`:''}</div>
+        <div class="tx-desc">${t.giorno?`<span style="color:${NAVY};font-weight:600">${String(t.giorno).padStart(2,'0')}</span> `:''}${haCedolino(t)?`<a href="#" data-cedolino="${t.anno}-${t.mese}" title="Cedolino in Cassaforte" style="text-decoration:none">&#128196;</a> `:''}${escapeHtml(t.descrizione)}${t.allegatoId?` <a href="#" data-open-allegato="${t.allegatoId}" title="${escapeHtml(t.allegatoNome||'Allegato')}" style="text-decoration:none">&#128206;</a>`:''}</div>
         <div class="tx-cat">${escapeHtml(t.categoria)}${t.amex?'<span class="amex-badge">AMEX · +1 MESE</span>':''}${etichettaStato(t)}${showDateBadge?' · '+MESI[t.mese-1].slice(0,3)+' '+t.anno:''}</div>
         ${t.ricorrenteGruppo ? `<div style="font-size:11px;color:#8A8072;margin-top:2px">Generata automaticamente</div>` : (dataInserimentoBreve ? `<div style="font-size:11px;color:#8A8072;margin-top:2px">Registrato il ${dataInserimentoBreve}</div>` : '')}
       </div>
       <div class="tx-actions" style="display:flex;align-items:center;gap:6px">
         <span class="tx-amt ${isE?'entrata':'uscita'}">${isE?'+':'\u2212'}${eur(t.importo)}</span>
         <button class="tx-del" data-edit-tx="${t.id}" title="Modifica" style="font-size:14px;padding:4px 8px">&#9998;</button>
-        ${!t.ricorrenteGruppo ? `<button class="tx-del" data-mark-recurrent="${t.id}" title="Rendi ricorrente" style="font-size:16px;padding:4px 8px">&#128257;</button>` : ''}
         <button class="tx-del" data-del="${t.id}" ${state.pendingDeleteId===t.id ? `style="background:${RUST};color:#fff;padding:2px 8px;border-radius:4px"` : ''}>${state.pendingDeleteId===t.id ? 'Conferma?' : '&#10005;'}</button>
       </div>
     </div>`;
@@ -1964,57 +1961,6 @@ function renderSaldoView(){
   `;
 }
 
-function prevMonth(y,m){ m--; if (m<1){m=12;y--;} return [y,m]; }
-
-function aggiornaImportoRicorrente(gid, nuovoImporto, daAnno, daMese){
-  const segs = state.ricorrenti.filter(r => r.gruppoId===gid);
-  const open = segs.find(r => !r.alAnno);
-  if (open) {
-    const [py, pm] = prevMonth(daAnno, daMese);
-    if (py < open.dalAnno || (py===open.dalAnno && pm < open.dalMese)) {
-      // il nuovo inizio è prima o uguale al segmento aperto: aggiorna direttamente l'importo del segmento aperto
-      open.importo = nuovoImporto;
-    } else {
-      open.alAnno = py; open.alMese = pm;
-      state.ricorrenti.push({id:uid(), gruppoId:gid, categoria:open.categoria, descrizione:open.descrizione,
-        importo:nuovoImporto, dalAnno:daAnno, dalMese:daMese, alAnno:null, alMese:null});
-    }
-  } else {
-    state.ricorrenti.push({id:uid(), gruppoId:gid, categoria:segs[0].categoria, descrizione:segs[0].descrizione,
-      importo:nuovoImporto, dalAnno:daAnno, dalMese:daMese, alAnno:null, alMese:null});
-  }
-  // rimuove eventuali movimenti auto-generati futuri con importo vecchio che ricadono nel nuovo segmento
-  const idsRimossi = [];
-  state.transazioni = state.transazioni.filter(t => {
-    if (t.ricorrenteGruppo !== gid) return true;
-    const afterStart = t.anno > daAnno || (t.anno===daAnno && t.mese >= daMese);
-    const daRimuovere = afterStart && t.importo !== nuovoImporto;
-    if (daRimuovere) idsRimossi.push(t.id);
-    return !daRimuovere;
-  });
-  saveRicorrenti();
-  salvaMovimentiBulk([], idsRimossi);
-  generaMovimentiRicorrenti();
-}
-
-function interrompiRicorrente(gid, alAnno, alMese){
-  const segs = state.ricorrenti.filter(r => r.gruppoId===gid);
-  const open = segs.find(r => !r.alAnno);
-  if (open) { open.alAnno = alAnno; open.alMese = alMese; }
-  // rimuove i movimenti auto-generati oltre la data di stop
-  const idsRimossi = [];
-  state.transazioni = state.transazioni.filter(t => {
-    if (t.ricorrenteGruppo !== gid) return true;
-    const afterStop = t.anno > alAnno || (t.anno===alAnno && t.mese > alMese);
-    if (afterStop) idsRimossi.push(t.id);
-    return !afterStop;
-  });
-  saveRicorrenti();
-  salvaMovimentiBulk([], idsRimossi);
-}
-
-function meseAnnoLabel(y,m){ return MESI[m-1].slice(0,3)+" "+y; }
-
 function renderDettaglioMutuo(mut, cfg){
   const pianoAnnuale = pianoAmmortamentoAnnuale(mut);
   const durataEffettivaAnni = pianoAnnuale.length;
@@ -2193,90 +2139,6 @@ function renderStipendiView(){
   `;
 }
 
-
-function renderRicorrentiView(){
-  const groups = {};
-  state.ricorrenti.forEach(r => {
-    if (!groups[r.gruppoId]) groups[r.gruppoId] = [];
-    groups[r.gruppoId].push(r);
-  });
-  const groupIds = Object.keys(groups).sort((a,b) => {
-    const fa = groups[a][0], fb = groups[b][0];
-    return (fa.descrizione||"").localeCompare(fb.descrizione||"");
-  });
-
-  return `
-  <div class="card" style="margin-bottom:20px">
-    <div class="card-title-row"><h3 style="margin-bottom:0">Spese ed entrate ricorrenti</h3>
-      <button class="add-btn" id="openAddRicorrente">+ Nuova ricorrenza</button></div>
-    <p class="sub" style="margin-top:-8px;margin-bottom:16px">Le voci ricorrenti si riportano da sole ogni mese con lo stesso importo, fino ad oggi. Se l'importo cambia, usa "Aggiorna importo": lo storico resta invariato, solo i mesi da lì in poi useranno il nuovo valore.</p>
-    ${groupIds.length===0 ? '<p class="empty">Nessuna voce ricorrente configurata.</p>' : groupIds.map(gid => {
-      const segs = groups[gid].sort((a,b)=> a.dalAnno-b.dalAnno || a.dalMese-b.dalMese);
-      const first = segs[0];
-      const isEntrata = first.categoria === "Entrate";
-      return `<div style="border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <div><span style="font-weight:700">${escapeHtml(first.descrizione)}</span>
-            <span class="sub" style="margin-left:8px">${escapeHtml(first.categoria)}</span></div>
-          <div style="display:flex;gap:6px">
-            <button class="range-btn" data-update-gruppo="${gid}">Aggiorna importo</button>
-            <button class="range-btn" data-stop-gruppo="${gid}">Interrompi</button>
-            <button class="admin-del" data-delete-gruppo="${gid}">&#128465;</button>
-          </div>
-        </div>
-        ${segs.map(s => `<div style="font-size:12px;color:var(--muted);padding:2px 0">
-          ${meseAnnoLabel(s.dalAnno,s.dalMese)} &rarr; ${s.alAnno ? meseAnnoLabel(s.alAnno,s.alMese) : 'in corso'}
-          <span style="font-family:ui-monospace,monospace;font-weight:700;color:${isEntrata?GREEN:RUST};margin-left:8px">${eur(s.importo)}</span>
-        </div>`).join('')}
-      </div>`;
-    }).join('')}
-  </div>
-  <div id="ricorrentiModalRoot"></div>
-  `;
-}
-
-function renderAddRicorrenteModal(){
-  return `
-  <div class="modal-bg" id="modalBg2">
-    <div class="modal">
-      <div class="modal-head"><h3 style="font-family:ui-serif,Georgia,serif;font-size:16px;margin:0">Nuova voce ricorrente</h3>
-        <button class="modal-close" id="closeModal2">&#10005;</button></div>
-      <div class="form-grid">
-        <select id="rCategoria">${catConEntrate().map(c=>`<option>${escapeHtml(c)}</option>`).join('')}</select>
-        <input type="text" id="rDescrizione" placeholder="Descrizione (es. Bolletta luce)">
-        <input type="text" inputmode="decimal" id="rImporto" placeholder="Importo fisso &euro; (es. 50,00)">
-        <div class="form-row">
-          <select id="rMese">${MESI.map((m,i)=>`<option value="${i+1}" ${state.selMonth===i+1?'selected':''}>${m}</option>`).join('')}</select>
-          <input type="number" id="rAnno" value="${state.selYear}" style="width:90px">
-        </div>
-        <p class="sub" style="margin:0">Da questo mese in poi verrà generato automaticamente ogni mese, fino ad oggi.</p>
-        <button class="add-btn" id="submitAddRicorrente" style="justify-content:center;padding:10px 0;font-size:14px">Crea ricorrenza</button>
-      </div>
-    </div>
-  </div>`;
-}
-
-function renderUpdateImportoModal(gid){
-  const segs = state.ricorrenti.filter(r=>r.gruppoId===gid);
-  const open = segs.find(r => !r.alAnno) || segs[segs.length-1];
-  return `
-  <div class="modal-bg" id="modalBg2">
-    <div class="modal">
-      <div class="modal-head"><h3 style="font-family:ui-serif,Georgia,serif;font-size:16px;margin:0">Aggiorna importo</h3>
-        <button class="modal-close" id="closeModal2">&#10005;</button></div>
-      <div class="form-grid">
-        <p class="sub" style="margin:0">"${escapeHtml(open.descrizione)}" — importo attuale: ${eur(open.importo)}</p>
-        <input type="text" inputmode="decimal" id="uImporto" placeholder="Nuovo importo &euro; (es. 50,00)">
-        <div class="form-row">
-          <select id="uMese">${MESI.map((m,i)=>`<option value="${i+1}" ${state.selMonth===i+1?'selected':''}>${m}</option>`).join('')}</select>
-          <input type="number" id="uAnno" value="${state.selYear}" style="width:90px">
-        </div>
-        <p class="sub" style="margin:0">Il nuovo importo vale da questo mese in poi. I mesi precedenti già registrati restano invariati.</p>
-        <button class="add-btn" id="submitUpdateImporto" data-gruppo="${gid}" style="justify-content:center;padding:10px 0;font-size:14px">Applica da questo mese</button>
-      </div>
-    </div>
-  </div>`;
-}
 
 function renderTrimModal(cfg){
   const isEdit = !!cfg;
@@ -2798,18 +2660,6 @@ function attachHandlers(){
         }, 4000);
       };
     });
-    document.querySelectorAll("[data-mark-recurrent]").forEach(b => b.onclick = () => {
-      const t = state.transazioni.find(x => x.id === b.dataset.markRecurrent);
-      if (!t) { alert("Movimento non trovato, riprova."); return; }
-      const gruppoId = uid();
-      t.ricorrenteGruppo = gruppoId;
-      state.ricorrenti.push({id:uid(), gruppoId, categoria:t.categoria, descrizione:t.descrizione, importo:t.importo, dalAnno:t.anno, dalMese:t.mese, alAnno:null, alMese:null});
-      salvaMovimento(t); saveRicorrenti();
-      generaMovimentiRicorrenti();
-      render();
-      alert(`Fatto: "${t.descrizione}" (${eur(t.importo)}) è ora ricorrente. La trovi anche nel tab \u{1F501} Ricorrenti.`);
-    });
-
     const openModalFor = (editTx) => {
       document.getElementById("modalRoot").innerHTML = renderAddModal(editTx);
       document.getElementById("closeModal").onclick = () => { document.getElementById("modalRoot").innerHTML = ""; };
@@ -2987,72 +2837,6 @@ function attachHandlers(){
         state.stipendi.detrazioneMutuo.estinzioniAnticipate = state.stipendi.detrazioneMutuo.estinzioniAnticipate.filter(e => e.id !== b.dataset.delestinzione);
         saveStipendi();
         render();
-      };
-    });
-  }
-
-  if (state.tab === "ricorrenti") {
-    const openAddR = document.getElementById("openAddRicorrente");
-    if (openAddR) openAddR.onclick = () => {
-      document.getElementById("ricorrentiModalRoot").innerHTML = renderAddRicorrenteModal();
-      document.getElementById("closeModal2").onclick = () => { document.getElementById("ricorrentiModalRoot").innerHTML=""; };
-      document.getElementById("modalBg2").onclick = (e) => { if (e.target.id==="modalBg2") document.getElementById("ricorrentiModalRoot").innerHTML=""; };
-      document.getElementById("submitAddRicorrente").onclick = () => {
-        const categoria = document.getElementById("rCategoria").value;
-        const descrizione = document.getElementById("rDescrizione").value.trim();
-        const importo = parseImporto(document.getElementById("rImporto").value);
-        const mese = Number(document.getElementById("rMese").value);
-        const anno = Number(document.getElementById("rAnno").value);
-        if (!descrizione) { alert("Scrivi una descrizione."); return; }
-        if (!importo || isNaN(importo)) { alert("Inserisci un importo valido (es. 50,00)."); return; }
-        const gruppoId = uid();
-        state.ricorrenti.push({id:uid(), gruppoId, categoria, descrizione, importo, dalAnno:anno, dalMese:mese, alAnno:null, alMese:null});
-        registraAudit("Ricorrenza creata", `${descrizione} — ${eur(importo)}`);
-        saveRicorrenti();
-        generaMovimentiRicorrenti();
-        document.getElementById("ricorrentiModalRoot").innerHTML = "";
-        render();
-      };
-    };
-
-    document.querySelectorAll("[data-update-gruppo]").forEach(b => {
-      b.onclick = () => {
-        const gid = b.dataset.updateGruppo;
-        document.getElementById("ricorrentiModalRoot").innerHTML = renderUpdateImportoModal(gid);
-        document.getElementById("closeModal2").onclick = () => { document.getElementById("ricorrentiModalRoot").innerHTML=""; };
-        document.getElementById("modalBg2").onclick = (e) => { if (e.target.id==="modalBg2") document.getElementById("ricorrentiModalRoot").innerHTML=""; };
-        document.getElementById("submitUpdateImporto").onclick = () => {
-          const newImporto = parseImporto(document.getElementById("uImporto").value);
-          const mese = Number(document.getElementById("uMese").value);
-          const anno = Number(document.getElementById("uAnno").value);
-          if (!newImporto || isNaN(newImporto)) { alert("Inserisci un importo valido (es. 50,00)."); return; }
-          aggiornaImportoRicorrente(gid, newImporto, anno, mese);
-          document.getElementById("ricorrentiModalRoot").innerHTML = "";
-          render();
-        };
-      };
-    });
-
-    document.querySelectorAll("[data-stop-gruppo]").forEach(b => {
-      b.onclick = () => {
-        const gid = b.dataset.stopGruppo;
-        const meseTxt = prompt("Interrompi da quale mese in poi? Scrivi mese e anno, es. 08/2026 (l'ultimo mese generato sarà quello precedente)");
-        if (!meseTxt) return;
-        const m = meseTxt.match(/^(\d{1,2})\D+(\d{4})$/);
-        if (!m) { alert("Formato non valido. Usa MM/AAAA."); return; }
-        const [ultimoAnno, ultimoMese] = prevMonth(Number(m[2]), Number(m[1]));
-        interrompiRicorrente(gid, ultimoAnno, ultimoMese);
-        render();
-      };
-    });
-
-    document.querySelectorAll("[data-delete-gruppo]").forEach(b => {
-      b.onclick = () => {
-        const gid = b.dataset.deleteGruppo;
-        const count = state.transazioni.filter(t=>t.ricorrenteGruppo===gid).length;
-        if (!confirm(`Eliminare questa ricorrenza? I ${count} movimenti già generati NON verranno cancellati, ma smetterà di generarne di nuovi.`)) return;
-        state.ricorrenti = state.ricorrenti.filter(r => r.gruppoId !== gid);
-        saveRicorrenti(); render();
       };
     });
   }
