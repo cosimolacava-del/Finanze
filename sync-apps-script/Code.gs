@@ -324,14 +324,14 @@ function sincronizzaAmexEmail() {
   if (!imp.attiva) return;
   const etOk = GmailApp.getUserLabelByName("finanze-importata") || GmailApp.createLabel("finanze-importata");
   const etKo = GmailApp.getUserLabelByName("finanze-da-controllare") || GmailApp.createLabel("finanze-da-controllare");
-  const query = prop("AMEX_QUERY", "from:americanexpress newer_than:14d") + " -label:finanze-importata -label:finanze-da-controllare";
+  const query = prop("AMEX_QUERY", "from:welcome.americanexpress.com subject:\"Conferma Operazione\" newer_than:14d") + " -label:finanze-importata -label:finanze-da-controllare";
   let nuovi = 0;
   GmailApp.search(query, 0, 50).forEach(thread => {
     let ok = true;
     thread.getMessages().forEach(m => {
       const a = parseAvvisoAmex(m.getSubject(), m.getPlainBody());
       if (!a) { ok = false; return; }
-      const data = Utilities.formatDate(m.getDate(), "Europe/Rome", "yyyy-MM-dd");
+      const data = a.data || Utilities.formatDate(m.getDate(), "Europe/Rome", "yyyy-MM-dd");
       if (daImportare(imp, data, a.esercente) && creaInbox("amex_" + hashBreve(m.getId()), {
         fonte: "amex", data: data, importo: a.importo, entrata: false,
         descrizione: a.esercente.slice(0, 200), amex: true
@@ -344,16 +344,21 @@ function sincronizzaAmexEmail() {
   console.log("AMEX: " + nuovi + " nuovi acquisti");
 }
 
-// DA ADATTARE al testo reale delle email American Express Italia: queste
-// espressioni sono un punto di partenza. Restituisce null se non riconosce
-// l'email, che finisce con l'etichetta "finanze-da-controllare".
+// Avviso "Conferma Operazione" di American Express Italia. Il corpo contiene:
+//   *Dettagli operazione:*
+//   3 nov 2026 APPLE COM BILL
+//   €1,99
+// Restituisce null se non riconosce l'email (anche un importo negativo, cioè un
+// rimborso), che finisce con l'etichetta "finanze-da-controllare".
+const MESI_AMEX = { gen: 1, feb: 2, mar: 3, apr: 4, mag: 5, giu: 6, lug: 7, ago: 8, set: 9, ott: 10, nov: 11, dic: 12 };
+
 function parseAvvisoAmex(oggetto, corpo) {
-  const testo = (oggetto + "\n" + corpo).replace(/ /g, " ");
-  const mImp = testo.match(/(?:€|EUR)\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})/) || testo.match(/([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*(?:€|EUR)/);
-  if (!mImp) return null;
-  const importo = Number(mImp[1].replace(/\./g, "").replace(",", "."));
-  const mEs = testo.match(/(?:presso|esercente|merchant)\s*:?\s*([^\n]{2,80})/i);
-  return { importo: importo, esercente: mEs ? mEs[1].trim() : "Acquisto AMEX" };
+  if (!/conferma operazione/i.test(oggetto)) return null;
+  const testo = String(corpo).replace(/[\u00a0\r]/g, " ");
+  const m = testo.match(/Dettagli operazione:?\**\s*\n\s*(\d{1,2})\s+([a-z]{3})[a-z]*\.?\s+(\d{4})\s+([^\n]+?)\s*\n\s*€\s*([0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2})\s*\n/i);
+  if (!m || !MESI_AMEX[m[2].toLowerCase()]) return null;
+  const data = m[3] + "-" + String(MESI_AMEX[m[2].toLowerCase()]).padStart(2, "0") + "-" + m[1].padStart(2, "0");
+  return { data: data, esercente: m[4].trim(), importo: Number(m[5].replace(/\./g, "").replace(",", ".")) };
 }
 
 // ---------------------------------------------------------------------------

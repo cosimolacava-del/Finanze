@@ -49,10 +49,10 @@ match /bilancio_familiare_inbox/{id} {
    | `EB_APP_ID` | Application ID di Enable Banking |
    | `EB_PRIVATE_KEY` | contenuto completo del file `.pem` (PKCS#8) |
    | `FIREBASE_PROJECT_ID` | `bilancio-lacavagiroletti` |
-   | `AMEX_QUERY` | *(facoltativa)* ricerca Gmail delle email AMEX, predefinita `from:americanexpress newer_than:14d` |
+   | `AMEX_QUERY` | *(facoltativa)* ricerca Gmail delle email AMEX, predefinita `from:welcome.americanexpress.com subject:"Conferma Operazione" newer_than:14d` |
    | `EB_ASPSP_NAME` | *(facoltativa)* predefinita `BPER Banca` |
    | `WEB_APP_URL` | l'URL `/exec` dell'app web (viene salvato anche da solo al primo collegamento BPER) |
-   | `AMEX_ATTIVO` | `si` per attivare la lettura delle email AMEX, dopo aver verificato `parseAvvisoAmex` |
+   | `AMEX_ATTIVO` | `si` per attivare la lettura delle email AMEX (poi riesegui `installaPianificazione`) |
 
 5. **Distribuisci → Nuova distribuzione → App web**: esegui come "Me", accesso "Solo io". Copia l'URL dell'app web (finisce con `/exec`).
 6. Dall'editor esegui la funzione `installaPianificazione` e concedi le autorizzazioni richieste.
@@ -63,10 +63,11 @@ Il consenso dura al massimo circa 6 mesi, come prevede la PSD2. Due settimane pr
 
 ## 4. Email AMEX
 
-1. Nell'app o nel sito American Express attiva gli avvisi email per **ogni acquisto**.
-2. La funzione `parseAvvisoAmex` in `Code.gs` è un punto di partenza: va adattata al testo reale delle email.
+1. Nell'app o nel sito American Express attiva gli avvisi email per **ogni acquisto** (soglia minima, ad esempio 1 €).
+2. Gli avvisi arrivano con oggetto **"Conferma Operazione"**. `parseAvvisoAmex` legge data, esercente e importo dal blocco "Dettagli operazione".
    - Le email riconosciute ricevono l'etichetta Gmail `finanze-importata`.
-   - Quelle non riconosciute ricevono `finanze-da-controllare`: se ne vedi, il riconoscimento va sistemato.
+   - Quelle non riconosciute (ad esempio un rimborso, con importo negativo) ricevono `finanze-da-controllare`: se ne vedi, il riconoscimento va sistemato.
+   - Le altre email AMEX, come "Aggiornamento sul saldo", non vengono lette.
 
 ## 5. Documenti per la Cassaforte (Gmail e Dropbox)
 
@@ -87,5 +88,5 @@ Per collegare Dropbox:
 
 ## Cosa resta da verificare
 
-- Il testo delle email AMEX Italia, per completare `parseAvvisoAmex`.
+- Il formato degli avvisi AMEX di rimborso, che per ora finiscono in `finanze-da-controllare`.
 - Nome esatto e durata del consenso di BPER su Enable Banking: lo script li legge da `/aspsps`.
