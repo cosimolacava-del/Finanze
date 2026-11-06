@@ -842,6 +842,28 @@ function drawLineChart(canvas, labels, datasets, opts){
       if (!started){ ctx.moveTo(x,y); started=true; } else { ctx.lineTo(x,y); }
     });
     ctx.stroke();
+    // Serie con pochi punti: pallino e valore scritto su ciascuno.
+    if (ds.punti){
+      ctx.setLineDash([]);
+      const ultimo = ds.data.length-1;
+      ds.data.forEach((v,i) => {
+        if (v==null) return;
+        const x = xForIdx(i), y = yForVal(v);
+        ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI*2);
+        ctx.fillStyle = ds.color; ctx.fill();
+        ctx.strokeStyle = "#FBF9F3"; ctx.lineWidth = 2; ctx.stroke();
+        ctx.fillStyle = NAVY; ctx.font = "600 11px ui-sans-serif,sans-serif";
+        ctx.textAlign = i===0 ? "left" : i===ultimo ? "right" : "center";
+        // Sotto il punto se è più basso dei vicini, così il testo non finisce sulla linea.
+        const vicini = [ds.data[i-1], ds.data[i+1]].filter(n => n!=null);
+        const sotto = v < vicini.reduce((s,n)=>s+n,0)/vicini.length && y+16 < padT+plotH;
+        const testo = plotW/labels.length >= 56 ? Math.round(v).toLocaleString("it-IT")+" €" : fmtCompact(v);
+        const ty = sotto ? y+16 : y-10;
+        ctx.strokeStyle = "#FBF9F3"; ctx.lineWidth = 3; ctx.lineJoin = "round";
+        ctx.strokeText(testo, x, ty);
+        ctx.fillText(testo, x, ty);
+      });
+    }
   });
 
   // legend
@@ -1157,6 +1179,11 @@ function renderAndamentoView(){
     <div id="yearFilterRow" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px"></div>
     <canvas class="chart-canvas" id="yearCompareChart" data-h="280"></canvas>
   </div>
+  <div class="card" style="margin-bottom:20px">
+    <div class="card-title-row"><h3 style="margin-bottom:0">Risparmio medio mensile per anno</h3></div>
+    <p class="sub" id="yearAverageNote" style="margin-top:0;margin-bottom:10px"></p>
+    <canvas class="chart-canvas" id="yearAverageChart" data-h="280"></canvas>
+  </div>
 
   <div class="card">
     <div class="card-title-row"><h3 style="margin-bottom:0">Riepilogo annuale</h3>
@@ -1257,6 +1284,7 @@ function drawAndamentoCharts(){
   }
 
   drawYearCompareChart(data, allYears);
+  drawYearAverageChart(data, allYears);
 
   // Grafico a torta: ripartizione spese per categoria nel Riepilogo Annuale
   const pieCanvas = document.getElementById("catPieChart");
@@ -1564,6 +1592,28 @@ function trimmedMean95(vals){
   return use.reduce((s,v)=>s+v,0)/use.length;
 }
 
+// Risparmio medio mensile di un anno. Conta solo i mesi conclusi, per non falsare
+// la media col mese in corso; null se l'anno non ne ha ancora nessuno.
+function mediaRisparmioAnno(data, anno){
+  const oggi = new Date();
+  const oggiAnno = oggi.getFullYear(), oggiMese = oggi.getMonth()+1;
+  const conclusi = data.filter(d => d.anno===anno && (anno < oggiAnno || (anno===oggiAnno && d.mese < oggiMese)));
+  if (conclusi.length === 0) return null;
+  return {media: conclusi.reduce((s,d)=>s+d.risparmio,0)/conclusi.length, mesi: conclusi.length};
+}
+
+function drawYearAverageChart(data, allYears){
+  const canvas = document.getElementById("yearAverageChart");
+  if (!canvas) return;
+  const medie = allYears.map(y => ({anno:y, ...mediaRisparmioAnno(data, y)})).filter(m => m.mesi);
+  drawLineChart(canvas, medie.map(m=>String(m.anno)), [
+    {label:"Risparmio medio mensile", data:medie.map(m=>m.media), color:NAVY, punti:true}
+  ], {legend:false});
+  const nota = document.getElementById("yearAverageNote");
+  const incompleti = medie.filter(m => m.mesi<12).map(m => `${m.anno} (${m.mesi} mesi)`);
+  if (nota) nota.textContent = "Conta solo i mesi conclusi." + (incompleti.length ? ` Anni incompleti: ${incompleti.join(", ")}.` : "");
+}
+
 function drawYearCompareChart(data, allYears){
   const selected = allYears.filter(y => state.andamentoYears.includes(y));
   // I mesi futuri rispetto a oggi possono avere già un valore (es. ricorrenze
@@ -1593,15 +1643,13 @@ function drawYearCompareChart(data, allYears){
     datasets.push({label:"Media storica (senza picchi)", data:byMonthAll, color: NAVY, width:3, dash:[7,4]});
   }
   if (state.andamentoShowMediaAnni) {
-    // Una linea orizzontale per anno, dello stesso colore. Conta solo i mesi
-    // conclusi, per non falsare la media col mese in corso; il valore è in legenda.
+    // Una linea orizzontale per anno, dello stesso colore; il valore è in legenda.
     selected.forEach(y => {
-      const conclusi = data.filter(d => d.anno===y && (y < oggiAnnoCompare || d.mese < oggiMeseCompare));
-      if (y > oggiAnnoCompare || conclusi.length === 0) return;
-      const media = conclusi.reduce((s,d)=>s+d.risparmio,0)/conclusi.length;
+      const m = mediaRisparmioAnno(data, y);
+      if (!m) return;
       const ds = datasets.find(d => d.label === String(y));
-      ds.label = `${y}: media ${eur(media)}`;
-      datasets.push({label:"", noLegend:true, data:MESI.map(()=>media), color:ds.color, width:1.5, dash:[6,4]});
+      ds.label = `${y}: media ${eur(m.media)}`;
+      datasets.push({label:"", noLegend:true, data:MESI.map(()=>m.media), color:ds.color, width:1.5, dash:[6,4]});
     });
   }
   const c2 = document.getElementById("yearCompareChart");
