@@ -258,6 +258,7 @@ let state = {
   andamentoRange: "12m",
   andamentoYears: null,
   andamentoShowMedia: false,
+  andamentoShowMediaAnni: false,
   riepilogoAnnoSel: null,
   risparmioReset: null,
   stipendi: null,
@@ -783,7 +784,20 @@ function drawLineChart(canvas, labels, datasets, opts){
   opts = opts || {};
   const {ctx, w, h} = setupCanvas(canvas);
   ctx.clearRect(0,0,w,h);
-  const padL = 54, padR = 14, padT = 14, padB = labels.length ? 46 : 26;
+  const padL = 54, padR = 14, padB = labels.length ? 46 : 26;
+  // La legenda va a capo se non sta su una riga: il grafico scende di conseguenza.
+  const legenda = [];
+  let lx = padL, ly = 8;
+  if (opts.legend !== false){
+    ctx.font = "11px ui-sans-serif,sans-serif";
+    datasets.filter(ds => !ds.noLegend).forEach(ds => {
+      const larghezza = 14 + ctx.measureText(ds.label).width;
+      if (lx > padL && lx + larghezza > w - padR){ lx = padL; ly += 16; }
+      legenda.push({ds, x:lx, y:ly});
+      lx += larghezza + 16;
+    });
+  }
+  const padT = 14 + (ly - 8);
   const plotW = w - padL - padR, plotH = h - padT - padB;
 
   let allVals = [];
@@ -831,17 +845,14 @@ function drawLineChart(canvas, labels, datasets, opts){
   });
 
   // legend
-  if (opts.legend !== false){
-    let lx = padL, ly = 8;
-    ctx.font = "11px ui-sans-serif,sans-serif";
-    datasets.forEach(ds => {
-      ctx.fillStyle = ds.color;
-      ctx.fillRect(lx, ly-8, 10, 10);
-      ctx.fillStyle = NAVY; ctx.textAlign="left";
-      ctx.fillText(ds.label, lx+14, ly+1);
-      lx += 14 + ctx.measureText(ds.label).width + 16;
-    });
-  }
+  ctx.setLineDash([]);
+  ctx.font = "11px ui-sans-serif,sans-serif";
+  legenda.forEach(({ds, x, y}) => {
+    ctx.fillStyle = ds.color;
+    ctx.fillRect(x, y-8, 10, 10);
+    ctx.fillStyle = NAVY; ctx.textAlign="left";
+    ctx.fillText(ds.label, x+14, y+1);
+  });
 }
 
 function fmtCompact(v){
@@ -1225,7 +1236,7 @@ function drawAndamentoCharts(){
         <input type="checkbox" class="year-filter-chk" data-year="${y}" ${checked?'checked':''}>
         <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color}"></span>${y}
       </label>`;
-    }).join('') + `<button class="range-btn" id="yearFilterAll">Tutti</button><button class="range-btn" id="yearFilterNone">Nessuno</button><button class="range-btn ${state.andamentoShowMedia?'active':''}" id="mediaToggle">&#8213; Media</button>`;
+    }).join('') + `<button class="range-btn" id="yearFilterAll">Tutti</button><button class="range-btn" id="yearFilterNone">Nessuno</button><button class="range-btn ${state.andamentoShowMedia?'active':''}" id="mediaToggle">&#8213; Media storica</button><button class="range-btn ${state.andamentoShowMediaAnni?'active':''}" id="mediaAnniToggle">&#8213; Media di ogni anno</button>`;
 
     filterRow.querySelectorAll(".year-filter-chk").forEach(chk => {
       chk.onchange = () => {
@@ -1241,6 +1252,8 @@ function drawAndamentoCharts(){
     if (noneBtn) noneBtn.onclick = () => { state.andamentoYears = []; drawAndamentoCharts(); };
     const mediaBtn = document.getElementById("mediaToggle");
     if (mediaBtn) mediaBtn.onclick = () => { state.andamentoShowMedia = !state.andamentoShowMedia; drawAndamentoCharts(); };
+    const mediaAnniBtn = document.getElementById("mediaAnniToggle");
+    if (mediaAnniBtn) mediaAnniBtn.onclick = () => { state.andamentoShowMediaAnni = !state.andamentoShowMediaAnni; drawAndamentoCharts(); };
   }
 
   drawYearCompareChart(data, allYears);
@@ -1578,6 +1591,18 @@ function drawYearCompareChart(data, allYears){
       return trimmedMean95(vals);
     });
     datasets.push({label:"Media storica (senza picchi)", data:byMonthAll, color: NAVY, width:3, dash:[7,4]});
+  }
+  if (state.andamentoShowMediaAnni) {
+    // Una linea orizzontale per anno, dello stesso colore. Conta solo i mesi
+    // conclusi, per non falsare la media col mese in corso; il valore è in legenda.
+    selected.forEach(y => {
+      const conclusi = data.filter(d => d.anno===y && (y < oggiAnnoCompare || d.mese < oggiMeseCompare));
+      if (y > oggiAnnoCompare || conclusi.length === 0) return;
+      const media = conclusi.reduce((s,d)=>s+d.risparmio,0)/conclusi.length;
+      const ds = datasets.find(d => d.label === String(y));
+      ds.label = `${y}: media ${eur(media)}`;
+      datasets.push({label:"", noLegend:true, data:MESI.map(()=>media), color:ds.color, width:1.5, dash:[6,4]});
+    });
   }
   const c2 = document.getElementById("yearCompareChart");
   if (c2) drawLineChart(c2, byMonth.map(r=>r.mese), datasets);
